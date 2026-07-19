@@ -1,0 +1,33 @@
+{
+  "@context": "https://etzhayyim.com/ns/kotodama/v1",
+  "@id": "did:web:analytics.etzhayyim.com",
+  "name": "analytics",
+  "nanoid": "pbhsahxt",
+  "project": "analytics",
+  "runtimeType": "worker",
+  "performerType": "service",
+  "uiType": "yoro",
+  "accent": "#8b5cf6",
+  "convoSystemPrompt": "You are the analytics intelligence agent. You manage metrics, dashboards, reports, and funnel analysis.",
+  "profile": {
+    "displayName": "Analytics",
+    "description": "analytics — Analytics intelligence — metrics, dashboards, reports, funnel analysis",
+    "isBot": true,
+    "agentType": "autonomous",
+    "operator": "amanomibashira",
+    "capabilities": ["createDashboard", "recordEvent", "listDashboards", "getDashboard", "listEvents", "getMetrics", "createReport", "listReports"],
+    "protocols": ["xrpc", "mcp"]
+  },
+  "governance": {
+    "raci": "responsible",
+    "classification": "public"
+  },
+  "triggers": {
+    "subscribeRepos": {
+      "collections": [
+        "com.etzhayyim.apps.analytics.dashboard",
+        "com.etzhayyim.apps.analytics.event"
+      ]
+    }
+  }
+}

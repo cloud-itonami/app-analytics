@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  targetNamespace="http://bpmn.io/schema/bpmn">
+
+  <!-- createDashboard -->
+  <bpmn:process id="analytics-create-dashboard" name="Analytics Create Dashboard" isExecutable="true">
+    <bpmn:startEvent id="start-create-dashboard"/>
+    <bpmn:sequenceFlow id="sf-cd-1" sourceRef="start-create-dashboard" targetRef="task-create-dashboard"/>
+    <bpmn:serviceTask id="task-create-dashboard" name="Create Dashboard">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="com.etzhayyim.apps.analytics.createDashboard"/>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="sf-cd-2" sourceRef="task-create-dashboard" targetRef="end-create-dashboard"/>
+    <bpmn:endEvent id="end-create-dashboard"/>
+  </bpmn:process>
+
+  <!-- recordEvent -->
+  <bpmn:process id="analytics-record-event" name="Analytics Record Event" isExecutable="true">
+    <bpmn:startEvent id="start-record-event"/>
+    <bpmn:sequenceFlow id="sf-re-1" sourceRef="start-record-event" targetRef="task-record-event"/>
+    <bpmn:serviceTask id="task-record-event" name="Record Event">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="com.etzhayyim.apps.analytics.recordEvent"/>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="sf-re-2" sourceRef="task-record-event" targetRef="end-record-event"/>
+    <bpmn:endEvent id="end-record-event"/>
+  </bpmn:process>
+
+  <!-- listDashboards -->
+  <bpmn:process id="analytics-list-dashboards" name="Analytics List Dashboards" isExecutable="true">
+    <bpmn:startEvent id="start-list-dashboards"/>
+    <bpmn:sequenceFlow id="sf-ld-1" sourceRef="start-list-dashboards" targetRef="task-list-dashboards"/>
+    <bpmn:serviceTask id="task-list-dashboards" name="List Dashboards">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="com.etzhayyim.apps.analytics.listDashboards"/>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="sf-ld-2" sourceRef="task-list-dashboards" targetRef="end-list-dashboards"/>
+    <bpmn:endEvent id="end-list-dashboards"/>
+  </bpmn:process>
+
+  <!-- getDashboard -->
+  <bpmn:process id="analytics-get-dashboard" name="Analytics Get Dashboard" isExecutable="true">
+    <bpmn:startEvent id="start-get-dashboard"/>
+    <bpmn:sequenceFlow id="sf-gd-1" sourceRef="start-get-dashboard" targetRef="task-get-dashboard"/>
+    <bpmn:serviceTask id="task-get-dashboard" name="Get Dashboard">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="com.etzhayyim.apps.analytics.getDashboard"/>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="sf-gd-2" sourceRef="task-get-dashboard" targetRef="end-get-dashboard"/>
+    <bpmn:endEvent id="end-get-dashboard"/>
+  </bpmn:process>
+
+  <!-- listEvents -->
+  <bpmn:process id="analytics-list-events" name="Analytics List Events" isExecutable="true">
+    <bpmn:startEvent id="start-list-events"/>
+    <bpmn:sequenceFlow id="sf-lev-1" sourceRef="start-list-events" targetRef="task-list-events"/>
+    <bpmn:serviceTask id="task-list-events" name="List Events">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="com.etzhayyim.apps.analytics.listEvents"/>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="sf-lev-2" sourceRef="task-list-events" targetRef="end-list-events"/>
+    <bpmn:endEvent id="end-list-events"/>
+  </bpmn:process>
+
+  <!-- getMetrics -->
+  <bpmn:process id="analytics-get-metrics" name="Analytics Get Metrics" isExecutable="true">
+    <bpmn:startEvent id="start-get-metrics"/>
+    <bpmn:sequenceFlow id="sf-gm-1" sourceRef="start-get-metrics" targetRef="task-get-metrics"/>
+    <bpmn:serviceTask id="task-get-metrics" name="Get Metrics">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="com.etzhayyim.apps.analytics.getMetrics"/>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="sf-gm-2" sourceRef="task-get-metrics" targetRef="end-get-metrics"/>
+    <bpmn:endEvent id="end-get-metrics"/>
+  </bpmn:process>
+
+  <!-- createReport -->
+  <bpmn:process id="analytics-create-report" name="Analytics Create Report" isExecutable="true">
+    <bpmn:startEvent id="start-create-report"/>
+    <bpmn:sequenceFlow id="sf-cr-1" sourceRef="start-create-report" targetRef="task-create-report"/>
+    <bpmn:serviceTask id="task-create-report" name="Create Report">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="com.etzhayyim.apps.analytics.createReport"/>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="sf-cr-2" sourceRef="task-create-report" targetRef="end-create-report"/>
+    <bpmn:endEvent id="end-create-report"/>
+  </bpmn:process>
+
+  <!-- listReports -->
+  <bpmn:process id="analytics-list-reports" name="Analytics List Reports" isExecutable="true">
+    <bpmn:startEvent id="start-list-reports"/>
+    <bpmn:sequenceFlow id="sf-lr-1" sourceRef="start-list-reports" targetRef="task-list-reports"/>
+    <bpmn:serviceTask id="task-list-reports" name="List Reports">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="com.etzhayyim.apps.analytics.listReports"/>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="sf-lr-2" sourceRef="task-list-reports" targetRef="end-list-reports"/>
+    <bpmn:endEvent id="end-list-reports"/>
+  </bpmn:process>
+
+</bpmn:definitions>

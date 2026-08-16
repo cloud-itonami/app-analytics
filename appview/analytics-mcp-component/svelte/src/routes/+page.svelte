@@ -4,11 +4,20 @@
   "project": "etzhayyim-project-analytics",
   "name": "analytics-mcp-component",
   "kind": "appview",
-  "routeCount": 0,
-  "routes": [],
-  "vars": [],
+  "routeCount": 1,
+  "routes": ["pbhsahxt.etzhayyim.com/*"],
+  "vars": [
+    "AGENTGATEWAY_MCP_ROUTER_URL",
+    "APP_CAPABILITIES",
+    "APP_DESCRIPTION",
+    "APP_DISPLAY_NAME",
+    "APP_FRAMEWORK",
+    "APP_NANOID",
+    "APP_PERFORMER_TYPE",
+    "APP_UI_TYPE"
+  ],
   "xrpc": true,
-  "relativePath": "60-apps/etzhayyim-project-analytics/appview/analytics-mcp-component/svelte/src/routes/+page.svelte"
+  "relativePath": "appview/analytics-mcp-component/svelte/src/routes/+page.svelte"
 };
 </script>
 

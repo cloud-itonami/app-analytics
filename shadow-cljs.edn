@@ -6,10 +6,24 @@
 ;; docs/adr/0001: before it, main pointed at "svelte/.svelte-kit/cloudflare/_worker.js"
 ;; -- a path that is not in the tree at all -- and the TypeScript a reader opened
 ;; (appview/analytics-mcp-component/src/app.ts) was in no bundle.
+;;
+;; :warnings-as-errors is not decoration. shadow treats an undeclared or renamed
+;; var as a WARNING, so `shadow-cljs release worker` exited 0 while writing a
+;; bundle that throws `Cannot read properties of undefined` on the first request.
+;; "The build succeeded" was therefore not a check at all -- it could not fail.
+;; Measured in cloud-itonami/app-cowork on 2026-08-18, and demonstrated in THIS
+;; repo before landing this line (docs/operator-quickstart.md S4).
 {:deps {:aliases [:cljs]}
  :builds
  {:worker
   {:target :esm
    :output-dir "dist"
    :modules {:worker {:exports {default analytics.worker/handler}}}
-   :compiler-options {:output-feature-set :es2020 :infer-externs :auto}}}}
+   ;; NOTE the key lives under :compiler-options, NOT :build-options -- shadow
+   ;; reads `[:compiler-options :warnings-as-errors]`
+   ;; (shadow/build/compiler.clj `should-warning-throw?`). Putting it under
+   ;; :build-options is silently ignored, which is the same failure this option
+   ;; exists to prevent: a fix that cannot fail.
+   :compiler-options {:output-feature-set :es2020
+                      :infer-externs :auto
+                      :warnings-as-errors true}}}}

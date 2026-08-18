@@ -1,0 +1,15 @@
+;; The analytics appview Worker. :esm, mirroring cloud-itonami-marketplace-listing
+;; and cloud-itonami/app-ongakuka.
+;;
+;; wrangler.jsonc's main points at dist/worker.js, which is THIS bundle compiled
+;; from the source in src/. That is the whole point of the migration recorded in
+;; docs/adr/0001: before it, main pointed at "svelte/.svelte-kit/cloudflare/_worker.js"
+;; -- a path that is not in the tree at all -- and the TypeScript a reader opened
+;; (appview/analytics-mcp-component/src/app.ts) was in no bundle.
+{:deps {:aliases [:cljs]}
+ :builds
+ {:worker
+  {:target :esm
+   :output-dir "dist"
+   :modules {:worker {:exports {default analytics.worker/handler}}}
+   :compiler-options {:output-feature-set :es2020 :infer-externs :auto}}}}

@@ -1,213 +1,316 @@
 # Operator quickstart — app-analytics
 
-23 tracked files: dashboards, aggregate metric datapoints and reports for an
-analytics service, plus a Cloudflare edge surface. Three things to know before
-reading them.
+26 tracked files: analytics（ダッシュボード・集計メトリクス・レポート）の
+**appview**、その参照実装スライス、プロセス定義。読む前に 3 つ。
 
-**Two implementations of the same eight methods live here, and the one that looks
-like the entry point is not the one that ships.** `wrangler.jsonc`'s `main` is the
-SvelteKit build; `appview/analytics-mcp-component/src/app.ts` is not deployed. They
-disagree about routing (§3).
+**deploy される Worker は、いま読んでいるソースである。** 2026-08-18 の移行前は
+そうではなかった —— `wrangler.jsonc` の `main` は tree に存在しないパス
+（SvelteKit のビルド出力）を指し、いちばんアプリケーションらしく読める
+`src/app.ts` はどの bundle にも入っていなかった（§3・`docs/adr/0001`）。
 
-**Nothing this repository addresses resolves.** All four hostnames it names —
-its own route, its DID, the MCP router it forwards to, the dispatcher `src/app.ts`
-proxies to — are `NXDOMAIN` (§7).
+**この repo が名指しするホストは 1 つも解決しない。** route も DID も中継先も
+NXDOMAIN（§9）。移行はそれを直さない。
 
-**This is not one of the nine `app-air-*` repositories, and their findings do not
-transfer.** The sharpest one does not: there `APP_CAPABILITIES` holds the first
-three of eight methods, a truncation. Here it holds all eight, in order, byte-identical
-to the handler's own list (§3). Check, don't assume.
+**`kotoba/` は appview ではなく、移行の対象外である。** TypeScript のまま
+1 バイトも触っていない（§8）。
 
-Steps marked ✅ were run on 2026-08-16. §9 says what was not walked.
+✅ が付いた節は 2026-08-18 に実際に走らせた。走らせていないものは §11 に書く。
 
 ---
 
-## §0 Environment traps
+## §0 環境の罠
 
-1. **the remote is not `origin`** — west names remotes after the org, so it is
-   `cloud-itonami`; `git fetch origin` fails on access rights.
-2. **`error: could not read IPC response` is the fsmonitor daemon**, not your
-   command. `-c core.fsmonitor=false` silences it.
-3. **npm 11.16 cannot install `kotoba/`'s git dependencies** — §5 has a workaround
-   that runs the suite.
-4. **there is no `.gitignore`** (`ls -a | grep -c gitignore` → `0`). Building in the
-   checkout leaves `node_modules/`, `.svelte-kit/` and any `page.html` untracked.
-   Build in a worktree, or clean up (§10).
+1. **remote は `origin` ではない** —— west は remote を org 名で持つので
+   `cloud-itonami`。`git fetch origin` は「そんな repo は無い」で落ちる。
+2. **`error: could not read IPC response` は fsmonitor daemon** であって
+   あなたのコマンドではない。`-c core.fsmonitor=false` で黙る。
+3. **npm 11.x は `kotoba/` の git 依存を install できない** —— §8 に、実際に
+   suite を通した回避手順がある。
+4. **`.gitignore` は移行で足した。** 移行前は無く、checkout の中でビルドすると
+   `node_modules/` と `.svelte-kit/` が未追跡で残った。いまは `dist/` /
+   `.shadow-cljs/` / `node_modules/` / `.cpcache/` / `.wrangler/` /
+   `package-lock.json` を無視する。
 
-`cloud-itonami/app-air-crew/docs/operator-quickstart.md` §0 documents the same traps
-at greater length; they are properties of the fleet, not of this repository.
+## §0.1 前提 ✅
 
-## §1 ✅ What this repository actually contains
+| 要るもの | 確認 | この walk で使った版 |
+|---|---|---|
+| git | `git --version` | 2.51.0 |
+| node | `node --version` | v26.3.0 |
+| nbb | `npx --yes nbb --version` | v1.4.210 |
+| clojure | `clojure --version` | §6 のビルド時のみ |
 
-```bash
-wc -l appview/analytics-mcp-component/src/app.ts \
-      appview/analytics-mcp-component/svelte/src/routes/xrpc/'[...path]'/+server.ts \
-      kotoba/src/registry.ts kotoba/src/types.ts kotoba/test/analytics.test.ts
-#    75 appview/.../src/app.ts                  (not deployed — §3)
-#    60 appview/.../routes/xrpc/[...path]/+server.ts   (deployed)
-#   251 kotoba/src/registry.ts                  (the domain logic)
-#   233 kotoba/src/types.ts
-#    68 kotoba/test/analytics.test.ts
-grep -cE '\b(it|test)\(' kotoba/test/analytics.test.ts   # 4
-git -c core.fsmonitor=false rev-list --count HEAD        # 4
-```
-
-The layout differs from the `app-air-*` family: there `src/` and `svelte/` sit at the
-repository root, here they are nested under `appview/analytics-mcp-component/`, while
-`kotoba/` and `bpmn/` stay at the root. That nesting is not cosmetic — it is what
-makes one file invisible to the fleet instrument (§8).
-
-`kotoba/src/registry.ts` is the only place a reader learns what the app does:
-`createDashboard` / `getDashboard` / `listDashboards`, `recordMetric` / `listMetrics` /
-`getMetrics` (an app-layer sum/count/min/max rollup, because AT PDS has no `GROUP BY`),
-`createReport` / `publishReport` / `listReports`, and `coverage`. Reports may
-FK-reference a dashboard; metric values are integers only and carry no per-user rows.
-
-## §2 ✅ The provenance claim is byte-exact
-
-`migration.edn` states the repository is a verbatim extraction of
-`etzhayyim/root@f9432ab5` `60-apps/etzhayyim-project-analytics` — 21 files, 44077
-bytes — plus exactly two additions. That is checkable, and it holds:
+## §1 ✅ 何が入っているか
 
 ```bash
-node -e '
-const {execSync}=require("child_process");
-const added=new Set(["README.edn","migration.edn"]);
-let n=0,bytes=0;
-for(const line of execSync("git ls-tree -r -l c2836a6",{encoding:"utf8"}).trim().split("\n")){
-  const m=line.match(/^\S+\s+blob\s+\S+\s+(\d+)\t(.+)$/);
-  if(m && !added.has(m[2])){ n++; bytes+=parseInt(m[1],10); }
-}
-console.log(n, bytes);'
-#   21 44077     ← exactly what migration.edn declares
+git -c core.fsmonitor=false ls-files | wc -l          # 26
+wc -l src/analytics/*.cljc src/analytics/*.cljs test/analytics/*.cljc
+#   168 src/analytics/route.cljc      判断（テスト対象）
+#    93 src/analytics/view.cljc       ページ（テスト対象）
+#   146 src/analytics/worker.cljs     Request/Response に触る唯一の層
+#    95 test/analytics/route_test.cljc
+wc -l kotoba/src/registry.ts kotoba/src/types.ts kotoba/test/analytics.test.ts
+#   251 / 233 / 68                    移行対象外（§8）
 ```
 
-**Run it against `c2836a6`, not the working tree.** The commit that added this
-document also changed `+page.svelte` (§4), so the number moved. A provenance check
-that reads `HEAD` will start failing for a reason that has nothing to do with
-provenance.
+**移行の副作用が 1 つ測れる。** 移行前、`git ls-files | awk -F/ 'NF>7'` は
+1 件を返した ——
+`appview/analytics-mcp-component/svelte/src/routes/xrpc/[...path]/+server.ts`。
+fleet の成熟度スキャナ `scripts/itonami-maturity-scan.cljs` は
+`(walk-files root 6 6000)` で歩き、**エントリ上限には truncation フラグを立てるが
+深さ上限には立てない**ので、この 1 件（= この app が実際に deploy していた
+唯一の route）が黙って落ちていた。移行後は:
 
-## §3 ✅ Two implementations, one deployed, and they disagree
+```bash
+git -c core.fsmonitor=false ls-files | awk -F/ 'NF>7' | wc -l   # 0
+git -c core.fsmonitor=false ls-files | awk -F/ 'NF<=7' | wc -l  # 26
+```
+
+深さ上限の欠陥自体は直っていない（スキャナ側の話）。ここで消えたのはそれを
+踏む形の方である。
+
+## §2 ✅ deploy されるものは、いま読んでいるソースである
 
 ```bash
 grep '"main"' appview/analytics-mcp-component/wrangler.jsonc
-#   "main": "svelte/.svelte-kit/cloudflare/_worker.js",
+#   "main": "../../dist/worker.js",
+git -c core.fsmonitor=false ls-files | grep -c svelte-kit     # 0
 ```
 
-So `src/app.ts` — the file with the readable dispatcher, the DID and the health
-endpoint — never runs. Built and served locally (`npm run build && vite preview`), the
-deployed worker answers:
+移行前の `main` は `svelte/.svelte-kit/cloudflare/_worker.js` で、これは
+**tree に存在しない**（上の `grep -c` が 0 を返すのがその測定である）。同時に
+`appview/analytics-mcp-component/src/app.ts` はどの `package.json` の script
+からも参照されておらず、どの bundle にも入らなかった。読み手が正本を決められ
+ない —— それが `docs/adr/0001` の Context である。
 
-| path | deployed (SvelteKit) | what `src/app.ts` would do |
-|---|---|---|
-| `GET /` | **200** landing page | 404 `NotFound` |
-| `GET /health` | **404** | 200 `{ok, actor, nanoid, methods…}` |
-| `GET /_app/meta` | **404** | 200, same payload |
-| `GET /xrpc/<nsid>` | **405** | proxied — it accepts GET and POST |
-| `POST /xrpc/<nsid>` | 500 (§7) | proxies to `dispatcher.etzhayyim.com` |
-| `OPTIONS /xrpc/<nsid>` | **204** CORS | 404 |
+いまは `main` が指す `dist/worker.js` が `src/analytics/worker.cljs` を
+shadow-cljs でコンパイルしたものである。**その 3 つ（shadow の出力先・
+wrangler の main・export の ns 名）が噛み合っていることを §7 の検証器が
+検査する**ので、噛み合わなくなれば落ちる。
 
-Three consequences worth writing down. **A monitor pointed at `/health` is watching a
-path that does not exist** — `not_found_handling: "none"` makes it a hard 404. **A
-client that sends `GET /xrpc/…`** — which the undeployed handler explicitly supports —
-**gets 405.** And the health payload advertises `bpmn:
-"60-apps/etzhayyim-project-analytics/bpmn"`, a path in the monorepo this was extracted
-from; here the file is `bpmn/analytics.bpmn`.
+## §3 ✅ 移した面と、移さなかった面
 
-The two also route to different upstreams: the deployed route forwards to
-`AGENTGATEWAY_MCP_ROUTER_URL` as a JSON-RPC `tools/call`, `src/app.ts` forwards to
-`DISPATCHER_URL` as plain JSON. Neither host resolves (§7).
+移したのは **deploy されていた 2 つ**だけ:
 
-**`APP_CAPABILITIES` is complete here.** Verified rather than assumed, because the
-sibling family's is not:
+| METHOD | PATH | 移行前（SvelteKit） | 移行後（cljs） |
+|---|---|---|---|
+| GET | `/` | 200 ページ | 200 ページ |
+| POST | `/xrpc/<nsid>` | MCP router へ JSON-RPC 中継 | 同じ |
+| OPTIONS | `/xrpc/<nsid>` | 204 CORS | 同じ |
+| GET | `/xrpc/<nsid>` | 405 | 405 |
+| GET | `/health` | **404** | **200** ← 唯一の意図的な差 |
+| その他 | | 404 | 404 |
+
+`/health` は移植ではなく**追加**である。移行前は `not_found_handling: "none"`
+によりハード 404 で、監視をそこに向けても存在しないパスを見ていた。上流も
+binding も要らない経路なので足した。
+
+**移していないもの**（`src/app.ts` にあり、どこにも deploy されていなかった）:
+`DISPATCHER_URL` 中継（宛先 NXDOMAIN、かつ binding が `wrangler.jsonc` に無い）、
+`DISPATCHER_INTERNAL_SECRET`（同じく binding が無い）、`/_app/meta`、
+health payload の `bpmn:`（抽出元モノレポのパスで、ここでは偽）。理由は
+README の「持ち越さなかったもの」に測定つきで書いてある。
+
+## §4 ✅ テストを走らせる（ビルド不要・ブラウザ不要）
+
+判断（`route.cljc`）と描画（`view.cljc`）は純 `.cljc` なので nbb だけで回る。
 
 ```bash
-node -e '
-const fs=require("fs");
-const w=fs.readFileSync("appview/analytics-mcp-component/wrangler.jsonc","utf8");
-const caps=JSON.parse(JSON.parse(w.match(/"APP_CAPABILITIES":\s*("(?:[^"\\]|\\.)*")/)[1]));
-const src=fs.readFileSync("appview/analytics-mcp-component/src/app.ts","utf8");
-const m=src.match(/methods:\s*\[([\s\S]*?)\]/)[1].match(/"([A-Za-z]+)"/g).map(s=>s.slice(1,-1));
-console.log(caps.length, m.length, JSON.stringify(caps)===JSON.stringify(m));'
-#   8 8 true
+K=~/github/com-junkawasaki/orgs/kotoba-lang
+CP="src:test:$K/jp-go-digital-design-system/src:$K/html/src:$K/css/src"
+cat > /tmp/run.cljs <<'EOF'
+(require '[cljs.test :refer [run-tests]] 'analytics.route-test)
+(run-tests 'analytics.route-test)
+EOF
+npx --yes nbb --classpath "$CP" /tmp/run.cljs
 ```
 
-It is still documentation rather than enforcement — `grep -c 'analytics'` on the
-deployed route returns **0**, because it forwards whatever NSID it is given and the
-method list lives upstream in the MCP router.
+実際の出力:
 
-## §4 ✅ The landing page told visitors it had no routes and no vars — fixed, and the render was checked
+```
+Testing analytics.route-test
 
-`appview/analytics-mcp-component/svelte/src/routes/+page.svelte` embeds a summary
-object and renders it. Before this commit it said `routeCount: 0, routes: [], vars: []`,
-with a `relativePath` pointing into the monorepo this repository was extracted from —
-so the page printed two sentences that its own `wrangler.jsonc` contradicts.
+Ran 7 tests containing 46 assertions.
+0 failures, 0 errors.
+```
 
-**Rendered over HTTP, before and after.** `vite preview` serves the built worker, so
-the page can be fetched rather than reasoned about:
+何を固定しているか: `/xrpc/` の nsid が **rest param**（`/xrpc/a/b` は `a/b`、
+`%2F` も decode）であること、nsid が無ければ 400 で前方一致では素通ししない
+こと、MCP router の URL 解決（空白だけの設定は未設定扱い）、`error` を
+`result` より先に見ること、body を包み直すので `content-length` を転送しない
+こと、そして **ページが route 表から描かれること**（固定値を焼いていたら落ちる）。
+
+**この 4 つは実際に落とした**（各 mutation とそれが赤くした test は
+`docs/adr/0001` の検証節）。
+
+## §5 ✅ ページを描画して採点する
 
 ```bash
-cd appview/analytics-mcp-component/svelte
-npm install --no-audit --no-fund && npm run build
-npx vite preview --port 4412 &
-curl -s http://localhost:4412/ > page.html
-grep -o 'No public route is declared\|No public vars are declared' page.html | wc -l
-grep -o 'pbhsahxt\.etzhayyim\.com/\*' page.html | wc -l
-grep -oE 'Routes</span><strong[^>]*>[0-9]+' page.html
+K=~/github/com-junkawasaki/orgs/kotoba-lang
+CP="src:$K/jp-go-digital-design-system/src:$K/html/src:$K/css/src"
+cat > /tmp/render.cljs <<'EOF'
+(require '["node:fs" :as fs] '[analytics.view :as view] '[analytics.route :as route])
+(let [css (.readFileSync fs (str (.-DDS js/process.env) "/resources/jp_go_dds/dds.css") "utf8")]
+  (.writeFileSync fs "/tmp/an-page.html"
+    (view/render {:css css :routes route/routes
+                  :vars [:AGENTGATEWAY_MCP_ROUTER_URL :APP_CAPABILITIES :APP_DESCRIPTION
+                         :APP_DISPLAY_NAME :APP_FRAMEWORK :APP_NANOID
+                         :APP_PERFORMER_TYPE :APP_UI_TYPE]
+                  :mcp-url (route/mcp-router-url {})
+                  :actor-did route/actor-did}))
+  (println "rendered" (.-size (.statSync fs "/tmp/an-page.html")) "bytes"))
+EOF
+DDS="$K/jp-go-digital-design-system" npx --yes nbb --classpath "$CP" /tmp/render.cljs
+cd $K/design-quality && npx --yes nbb -m design-quality.cli score /tmp/an-page.html --min 95
 ```
 
-| in the rendered HTML | before | after |
-|---|---|---|
-| false sentences present | 2 | **0** |
-| names its own route pattern | 0 | **1** |
-| var names listed | 0 | **8** |
-| the `Routes` figure | `0` | **`1`** |
-| var **values** leaked | 0 | **0** |
+実際の出力:
 
-The two sentences it used to print were:
+```
+rendered 82048 bytes
+  100.00  /tmp/an-page.html
+aggregate: 100.00
+gate: aggregate 100.00 >= min 95.00 -> PASS      (exit 0)
+```
 
-> No public route is declared next to this app surface.
-> No public vars are declared in the nearest wrangler config.
+**この gate が測っているものを取り違えないこと。** 10 軸は viewport meta /
+safe-area / tap target / focus-visible / reduced-motion / 対比などの
+**アクセシビリティと応答性**であって、`--hig-*` トークン規律ではない。実測で
+確かめた: app CSS に raw hex と `11px` を入れても **100.00 のまま**だった。
+一方 app CSS に `transition: color 0.2s ease;` を足すと（`prefers-reduced-motion`
+が無いので）**87.64 に落ちて gate は FAIL（exit 1）**。つまりこの gate は
+「DADS の上に建て、それを台無しにしていないこと」を証明する。トークン規律は
+コードレビューと `kotoba-uiux` の側で守る。
 
-Both name the wrangler config and both were false — it declares one route pattern and
-eight vars.
+## §6 bundle をビルドする ✅
 
-**Why fetching the page is the gate and grepping the bundle is not.** Svelte compiles
-**both** branches of an `{#if}` into the component, so the false sentences remain in
-the build output even when they cannot render. A grep over the bundle shows the data
-entering the build and nothing about which branch wins. The sibling `app-air-sched`
-was verified that way and the check did not settle it.
-
-The summary is now populated from `wrangler.jsonc`: `routeCount: 1`, the one pattern,
-the eight var **names** (the page prints keys only — the last row above is the check
-that no value escaped), and a `relativePath` inside this repository.
-
-**There is no generator for this object**, in this repository or in the root's
-`scripts/`, so it is hand-maintained: change routes or vars in `wrangler.jsonc` and
-this object will not follow.
-
-## §5 ✅ Run the tests
-
-`npm install` in `kotoba/` fails — both dependencies are git URLs whose preparation
-runs a nested install that npm 11.16 refuses (`EALLOWSCRIPTS`), and an `allowScripts`
-field does not help because the rejection happens inside the nested install.
-
-The workaround rests on two facts you can check:
+**高負荷ビルドは workspace 全体で同時 1 本**に制限されている（superproject
+`CLAUDE.md` の resource governor）。直接叩かず必ず guard 経由で:
 
 ```bash
-grep -n '@etzhayyim/sdk' kotoba/src/registry.ts kotoba/test/analytics.test.ts
-#   registry.ts:7:      import type { Etzhayyim } from "@etzhayyim/sdk";   ← type-only, erased
-#   analytics.test.ts:2: import { MockEtzhayyim } from "@etzhayyim/sdk-mock";
+node ~/github/com-junkawasaki/scripts/resource-guard.mjs run build -- \
+  npx --yes shadow-cljs release worker
+ls -la dist/worker.js
 ```
 
-The real SDK is needed only for types; the mock is standalone. Install the mock from
-disk with its unused dependency removed, **in a copy, never in the checkout**:
+lock を他セッションが持っていると **exit 2** で拒否される。
+`resource-guard: build is already running (pid=…)` は**エラーではなく順番待ち**
+なので、迂回せずに待つ。この walk では **45 秒間隔で 44 回 retry**（約 33 分、
+別セッションの `cloud-murakumo` と `protocols-worker` のビルドが順に lock を
+持っていた）してから通り、ビルド自体は 132.95 秒だった。
+
+実際の出力（末尾）:
+
+```
+shadow-cljs - config: /private/tmp/app-analytics-cljs/shadow-cljs.edn
+shadow-cljs - starting via "clojure"
+[:worker] Compiling ...
+[:worker] Build completed. (55 files, 12 compiled, 0 warnings, 132.95s)
+
+-rw-r--r--  1 junkawasaki  wheel  246174  8月 18 18:48 dist/worker.js
+```
+
+`WARNING: shadow-cljs not installed in project` と `sun.misc.Unsafe` の警告が
+先に出るが、どちらも致命ではない（前者は npm に入れず `clojure` 経由で回して
+いるため、後者は protobuf-java が JDK の非推奨 API を呼ぶため）。
+
+## §7 ビルドした成果物を実際に叩く ✅
+
+ここが **deploy されるものに触る唯一の検査**である。§4 のテストはソースの判断を
+固定するが、bundle が Worker の形で答えるかは言えない —— export の形、
+`:advanced-optimization` 下の env キー、`shadow.resource/inline` で焼いた CSS は、
+どれもビルドを通って初めて存在する。
+
+```bash
+npx --yes nbb scripts/smoke-worker.cljs dist/worker.js
+```
+
+実際の出力（27 項目すべて PASS、exit 0。抜粋）:
+
+```
+PASS	default export has fetch	expected=true	actual=true
+PASS	GET / status	expected=200	actual=200
+PASS	GET / is html	expected=true	actual=true
+PASS	page advertises /health	expected=true	actual=true
+PASS	page advertises /xrpc/:nsid	expected=true	actual=true
+PASS	page advertises この appview の説明ページ	expected=true	actual=true
+PASS	page advertises CORS preflight	expected=true	actual=true
+PASS	page shows a var key	expected=true	actual=true
+PASS	page shows every var key	expected=true	actual=true
+PASS	page hides var values	expected=false	actual=false
+PASS	page shows the resolved router url	expected=true	actual=true
+PASS	page shows the actor did	expected=true	actual=true
+PASS	page carries the design system	expected=true	actual=true
+PASS	page does not repeat the old false sentence	expected=false	actual=false
+PASS	GET /health status	expected=200	actual=200
+PASS	health names its routes	expected=true	actual=true
+PASS	POST /xrpc/ status	expected=400	actual=400
+PASS	POST /xrpc/ says why	expected=true	actual=true
+PASS	OPTIONS preflight	expected=204	actual=204
+PASS	OPTIONS advertises methods	expected="POST,OPTIONS"	actual="POST,OPTIONS"
+PASS	unknown path	expected=404	actual=404
+PASS	wrong method on /health	expected=405	actual=405
+PASS	405 carries allow	expected="GET"	actual="GET"
+PASS	GET on /xrpc is 405	expected=405	actual=405
+PASS	405 on xrpc allows POST, OPTIONS	expected="POST, OPTIONS"	actual="POST, OPTIONS"
+PASS	unreachable upstream is 502	expected=502	actual=502
+PASS	unreachable upstream says so	expected=true	actual=true
+OK	the built bundle answers as the route table says
+```
+
+**bundle が無ければ exit 2**（「判定できなかった」であって合格ではない）:
+
+```
+UNDETERMINED	no bundle at /private/tmp/app-analytics-cljs/dist/worker.js
+Refusing to report a pass: build it first (see docs/operator-quickstart.md §6).
+```
+
+env の**値**が漏れていないことは印（`SENTINEL-4c7e1b`）で見ている。実在しそうな
+値（`"yoro"` 等）を引用符ごと探す形は、renderer が `"` を `&quot;` に escape
+するので**構造的に落ちない** —— app-ongakuka の移行で実測して踏んだ罠なので、
+こちらは最初から印を使っている。
+
+## §7.5 ✅ 散文の数を tree から再計算する
+
+```bash
+npx --yes nbb scripts/verify-docs-claims.cljs .     # <dir> は先頭に置く
+```
+
+実際の出力（末尾）:
+
+```
+SCANNED	26
+PASS	tracked-files	expected=26	actual=26
+...
+OK	every claim in README.md and docs/operator-quickstart.md holds
+```
+
+18 claim すべて PASS、exit 0。**exit 2（UNDETERMINED）は 0 ではない** ——
+tree を読み切れなかったという別の答えで、「検査して問題なし」と混ぜない
+（実測: 追跡ファイル 0 件の tree に当てると `SCANNED 0` → exit 2）。
+
+この検証器には移行の不変条件が入っている: 撤去した 9 パスが戻っていないこと、
+appview に `.ts`/`.svelte` が 1 本も無いこと、`main` が shadow の出力先を
+指していること、`assets` と `rules` が消えていること、移行が触っていない
+13 ファイルが sha256 で同一であること、そして `wrangler.jsonc` と
+`kotodama.jsonld` が同じ 8 capability を宣言していること。**4 通りの mutation で
+実際に落とした**（`docs/adr/0001` の検証節）。
+
+## §8 ✅ `kotoba/` は移行対象外 —— それでもテストは通る
+
+`kotoba/` は analytics の公開カタログの参照実装スライスで、**appview ではない**
+（`wrangler.jsonc` はこれを bundle にも main にも含めず、appview のどのファイル
+も require していない）。移行は 1 バイトも触っていない。
+
+`npm install` は失敗する —— 依存 2 つとも git URL で、その準備が入れ子の install
+を走らせ、npm 11.x がそれを拒否する（`EALLOWSCRIPTS`）。実 SDK は**型のためだけ**
+に要り、mock は自立しているので、**checkout の外**で mock をディスクから入れる:
 
 ```bash
 rm -rf /tmp/analytics-sdk /tmp/analytics-build
 mkdir -p /tmp/analytics-sdk && cd /tmp/analytics-sdk
 git clone -q https://github.com/etzhayyim/com-etzhayyim-sdk-mock.git sdk-mock
-git -C sdk-mock checkout -q c857ff9be5310bf433bfe1e8d3c0f677e213d667   # the pinned SHA
+git -C sdk-mock checkout -q c857ff9be5310bf433bfe1e8d3c0f677e213d667
 
 mkdir -p /tmp/analytics-build && cp -R "$REPO/kotoba" /tmp/analytics-build/kotoba
 cd /tmp/analytics-build/kotoba && node -e '
@@ -218,133 +321,128 @@ fs.writeFileSync(f,JSON.stringify(p,null,2));
 p=JSON.parse(fs.readFileSync("package.json","utf8")); delete p.dependencies;
 p.devDependencies={"@etzhayyim/sdk-mock":"file:/tmp/analytics-sdk/sdk-mock","typescript":"^5.6.0","vitest":"^4.1.0"};
 fs.writeFileSync("package.json",JSON.stringify(p,null,2));'
-
 npm install --ignore-scripts --no-audit --no-fund
 npx vitest run
-#   Test Files  1 passed (1)
-#         Tests  4 passed (4)
 ```
 
-## §6 ✅ Do those four tests discriminate? Eight mutants say yes
+実際の出力（2026-08-18 に再実行）:
 
-Four green tests prove nothing until you have seen them go red. Each mutation below
-was required to match **exactly once** in `kotoba/src/registry.ts` before being
-applied — a replacement that silently matches nothing produces a red-free run that
-looks exactly like a surviving mutant, which is the failure mode this whole check
-exists to avoid.
+```
+added 47 packages in 49s
 
-| mutation | result | tests |
-|---|---|---|
-| M1 drop the integer-only guard on metric values | RED | 1 failed / 3 passed |
-| M2 rollup `min` computed with `Math.max` | RED | 1 failed / 3 passed |
-| M3 drop `listMetrics`'s `since` filter | RED | 1 failed / 3 passed |
-| M4 drop the report → dashboard FK check | RED | 1 failed / 3 passed |
-| M5 drop the double-publish guard | RED | 1 failed / 3 passed |
-| M6 drop dashboard widget validation | RED | 1 failed / 3 passed |
-| M7 rollup `sum` accumulates 0 | RED | 1 failed / 3 passed |
-| M8 coverage stops tallying reports by status | RED | 1 failed / 3 passed |
+ RUN  v4.1.10 /private/tmp/analytics-build/kotoba
 
-Eight of eight killed; `registry.ts` restored byte-identical afterwards and the suite
-green again. Four tests are few, but they are not decoration: every invariant the
-registry states in prose — integers only, aggregate rollup arithmetic, the optional
-FK, publish-once — is actually held down by one of them.
+ Test Files  1 passed (1)
+      Tests  4 passed (4)
+   Duration  3.31s
+```
 
-## §7 ✅ Nothing it addresses resolves
+この 4 本が実際に discriminate することは 2026-08-16 の walk が 8 mutant で
+確かめている（8/8 kill、`git log` にその quickstart 版が残っている）。**今回の
+walk では再実行していない** —— `kotoba/` は移行で 1 バイトも変わっておらず、
+検証器が sha256 で固定しているため。
+
+**測って分かった食い違いを 1 つ**: appview が宣言する 8 capability と `kotoba/`
+が export する 10 は一致しない（appview だけ `recordEvent` / `listEvents`、
+`kotoba/` だけ `recordMetric` / `listMetrics` / `publishReport` / `coverage`）。
+移行はこれを直さない。edge は与えられた nsid をそのまま中継するだけで、
+method 一覧は上流の MCP router 側にある。
+
+## §9 ✅ 名指しするホストが 1 つも解決しない
 
 ```bash
 for h in pbhsahxt.etzhayyim.com analytics.etzhayyim.com \
-         mcp.etzhayyim.com dispatcher.etzhayyim.com; do
-  printf '%-28s ' "$h"; dig @1.1.1.1 +noall +comment "$h" A | grep -oE 'status: [A-Z]+'
+         mcp.etzhayyim.com dispatcher.etzhayyim.com etzhayyim.com; do
+  printf '%-30s ' "$h"; dig +short "$h" | tr '\n' ' '; echo
 done
-#   pbhsahxt.etzhayyim.com       status: NXDOMAIN   ← its only wrangler route
-#   analytics.etzhayyim.com      status: NXDOMAIN   ← its DID and the src/app.ts header
-#   mcp.etzhayyim.com            status: NXDOMAIN   ← upstream of the deployed route
-#   dispatcher.etzhayyim.com     status: NXDOMAIN   ← upstream of src/app.ts
-dig +short @1.1.1.1 NS etzhayyim.com    # everton/vivienne.ns.cloudflare.com — the zone exists
+#   pbhsahxt.etzhayyim.com         (空)   ← 唯一の wrangler route
+#   analytics.etzhayyim.com        (空)   ← この appview の DID
+#   mcp.etzhayyim.com              (空)   ← /xrpc の中継先
+#   dispatcher.etzhayyim.com       (空)   ← 移していない app.ts 経路の中継先
+#   etzhayyim.com                  104.21.51.111 172.67.179.128   ← 2 レコードの順序は毎回入れ替わる
 ```
 
-The zone is live on Cloudflare and the apex resolves; these four records simply are not
-there. The repository declares a `did:web:analytics.etzhayyim.com` while shipping a
-route for `pbhsahxt.etzhayyim.com`, and neither name exists.
+zone 自体は生きていて、この 4 レコードだけが無い。
 
-**This surfaces as an opaque 500, not a diagnosable error.** The deployed route handles
-upstream *errors* (non-2xx, JSON-RPC `error`) but not upstream *unreachability* — the
-`fetch` is not guarded:
+**移行はこれを直さないが、見え方は変えた。** 移行前の SvelteKit の route は
+`fetch` を guard しておらず、運用者が見られるのは `{"message":"Internal Error"}`
+の 500 だけで、どちらの上流が落ちたのかも分からなかった。移行後は **502 と
+`{"error":"MCP router unreachable", "detail": …, "url": …}`** を返す。§7 の
+smoke がそれを、届かない先（`http://127.0.0.1:1/x`、DNS を引かないので offline
+でも決定論的）に対して実際に確かめる。
+
+## §10 deploy — この walk では実行していない
 
 ```bash
-curl -s -X POST -H 'content-type: application/json' -d '{}' \
-  http://localhost:4412/xrpc/com.etzhayyim.apps.analytics.listDashboards
-#   {"message":"Internal Error"}          http 500
-#   server log: TypeError: fetch failed
+cd appview/analytics-mcp-component
+npx wrangler deploy
 ```
 
-An operator seeing that 500 in production learns nothing about which of the two
-possible upstreams failed, or why.
+**route が指すホストは解決しない**（§9）ので、deploy が成功しても誰も到達でき
+ない。中継先も同様なので、到達できたとしても中継は 502 を返す。superproject の
+deploy guard は `origin/main` を包含した checkout からの deploy しか許さない点も
+併せて注意（west checkout の remote は org 名なので、その guard は
+`origin/main` を解決できず fail-open する —— superproject CLAUDE.md が
+2026-08-13 に記録した既知の穴）。
 
-## §8 ✅ The fleet instrument cannot see one of the 23 files — and does not say so
+## §11 この walk で走らせていないもの
 
-`scripts/itonami-maturity-scan.cljs` walks each repository with
-`(walk-files root 6 6000)` and reports `:repo/files-truncated?` when it hits the
-**6000-entry** cap. It reports nothing when it hits the **depth-6** cap. This
-repository's nesting crosses that line exactly once:
+- **`wrangler deploy`**（§10）。オーナー指示により deploy はしない。
+- `kotoba/` の 8 mutant による discrimination 検査（§8。2026-08-16 の walk の
+  結果を引用しており、今回は再実行していない）。
+- `MIGRATION-TODO.md` の憲章適合レビュー 7 項目。移行前から未チェックのまま。
+- `kotoba/` の cljs 移行（§8。この移行の対象ではない）。
+
+## §11.5 ✅ compatibility_flags を外してよいことを実際に確かめた
+
+移行前の `wrangler.jsonc` は `nodejs_compat` と `nodejs_als` を宣言していた。
+これは SvelteKit の `adapter-cloudflare` が要求するもので（`getRequestEvent` が
+`AsyncLocalStorage` を使う）、cljs の bundle には要らない。**外してから 2 通りで
+確かめた。**
+
+静的（bundle が何を要求しているか）:
 
 ```bash
-git -c core.fsmonitor=false ls-files | wc -l                 # 23
-git -c core.fsmonitor=false ls-files | awk -F/ 'NF<=7' | wc -l  # 22  ← what the walk reaches
-git -c core.fsmonitor=false ls-files | awk -F/ 'NF>7'
-#   appview/analytics-mcp-component/svelte/src/routes/xrpc/[...path]/+server.ts
+grep -o 'from *"node:[a-z_]*"' dist/worker.js | sort -u | wc -l   # 0
+grep -c 'require(' dist/worker.js                                 # 0
+grep -c 'AsyncLocalStorage' dist/worker.js                        # 0
+grep -c 'process\.' dist/worker.js                                # 0
+grep -c '\bBuffer\b' dist/worker.js                               # 0
 ```
 
-and the evidence row agrees: `:repo/file-count 22`, `:repo/files-truncated? false`.
-
-The one file it drops is **the only route this app actually deploys** (§3). The scan's
-own docstring says truncation "must not happen silently, because a truncated repo
-collapses to `src`/`test` = 0 and becomes indistinguishable from a repo with no
-implementation" — the entry cap honours that and the depth cap does not. It is the
-shape CLAUDE.md names: a check that *could not look* returning the same value as a
-check that *looked and found nothing*.
-
-No score moves because of it here (§9 explains why), so this is a note for whoever
-raises the depth or adds a depth-truncation flag, not a defect of this repository.
-
-## §9 What the maturity instrument sees here, and what is not a gap ✅
-
-```
-· orgs/cloud-itonami/app-analytics  own=0.049  axis-docs=0bp → +2500bp
-    ⚠ README が .md ではないので docs の README 成分は 0（README.edn 等が 1 件）
-    ⚠ taxonomy に :repo/kind の行が無い → :default の重みで採点されている
-```
-
-Both warnings are about the instrument, and one more is invisible in that output:
-
-- **`README.edn` declares `:canonical-metadata :edn`**, so EDN is deliberately
-  canonical here while `:doc/readme-bytes` reads `README.md`. Adding a second README
-  to move a number would be exactly the padding the loop forbids.
-- **No row in `manifest/repo-taxonomy.edn`** (`grep -c` → `0`), so this is scored
-  against the `:default` weight profile and its `own` is not comparable to a
-  repository whose kind is known — even though `README.edn` states `:kind :app`.
-- **`axis-substrate` and `axis-test` are structurally 0 and always will be.** The scan
-  counts only `cljc`/`cljs`/`clj`/`kotoba` under `src/` and `test/`. Every source file
-  here is TypeScript, so 251 lines of registry and 4 discriminating tests are counted
-  as nothing — and they are not even reported under `:uncounted/*`, because that
-  fallback filters on the same extension set. The tick is right to mark
-  `axis-substrate` as not targetable; the honest reading is that for a TypeScript
-  repository the instrument measures documentation, freshness and citations, and is
-  blind to the code.
-
-Recorded in ADR-2608052000. None of these are closed by adding files.
-
-## §10 Leave the checkout clean
-
-There is no `.gitignore` (§0.4), so §4 leaves five untracked artifacts, not the three
-you would guess — `npm install` writes a `package-lock.json` the repository does not
-track, and the Cloudflare adapter's preview writes `.wrangler/`:
+動的（フラグ無しの workerd で実際に動くか）:
 
 ```bash
-cd appview/analytics-mcp-component/svelte
-rm -rf node_modules .svelte-kit .wrangler page.html package-lock.json
-cd - && git -c core.fsmonitor=false status --porcelain    # must print nothing
+cd appview/analytics-mcp-component && npx --yes wrangler@latest dev --port 8799
 ```
 
-Verified by running it: the first three alone leave `.wrangler/` and
-`package-lock.json` behind. §5 and §6 already run in `/tmp` and touch nothing here.
+```
+[wrangler:info] Ready on http://localhost:8799
+```
+
+`curl` で全 route を叩いた結果（**deploy はしていない。local workerd のみ**）:
+
+| 叩いたもの | 返ってきたもの |
+|---|---|
+| `GET /` | 200 `text/html`、`/xrpc/:nsid` を 2 箇所で宣伝、`APP_NANOID` は出て `yoro` は出ない、`dads-*` class 71 個 |
+| `GET /health` | 200 `{"ok":true,…,"routes":["GET /","GET /health","POST /xrpc/:nsid","OPTIONS /xrpc/:nsid"]}` |
+| `POST /xrpc/` | 400 `{"error":"Missing XRPC method"}` |
+| `OPTIONS /xrpc/x` | 204 + `access-control-allow-methods: POST,OPTIONS` |
+| `GET /xrpc/x` | 405 |
+| `GET /nope` | 404 |
+| `POST /xrpc/<nsid>` | 502 `{"error":"MCP router unreachable",…}`（上流が NXDOMAIN） |
+
+dev のログに `no such module` / `nodejs_compat` / `Uncaught` は **0 件**。
+`rules` の CompiledWasm も外した —— tree に `.wasm` は 1 つも無く（検証器の
+`no-wasm-in-tree` claim）、この bundle も 1 つも出さないので inert だった。
+
+## §12 checkout を汚さない
+
+```bash
+rm -rf dist .shadow-cljs node_modules .cpcache .wrangler
+git -c core.fsmonitor=false status --porcelain     # 何も出ないこと
+```
+
+移行で足した `.gitignore` がこの 5 つを無視するので、ビルドしても未追跡ファイル
+は残らない（移行前は `.gitignore` が無く、5 個残った）。§8 は `/tmp` で走るので
+ここには何も触らない。

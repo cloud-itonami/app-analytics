@@ -1,0 +1,180 @@
+#!/usr/bin/env nbb
+;; verify-docs-claims — README.md と docs/operator-quickstart.md が述べる数と
+;; 存在・不在を tree から再計算し、食い違えば落とす。
+;;
+;; 移行前、この repo の要になる事実は **欠陥** だった: deploy される Worker は
+;; SvelteKit のビルド出力（tree に無いパス）で、アプリケーションらしく読める
+;; ファイル（appview/.../src/app.ts）はどの bundle にも入っていなかった。
+;; その欠陥は閉じたので、claim は**閉じたこと**を主張する。しかも静かに戻って
+;; これないように書いてある —— TypeScript は「合計バイト数が減った」ではなく
+;; **パスを名指しして不在**を検査する。
+;;
+;; Usage:  nbb scripts/verify-docs-claims.cljs [<dir>]     (<dir> は先頭、既定 ".")
+;; Exit:   0 全 claim が成立 · 1 claim が偽 · 2 答えられなかった
+
+(require '["node:fs" :as fs]
+         '["node:child_process" :as cp]
+         '["node:crypto" :as crypto]
+         '[clojure.string :as str])
+
+(def root (or (first (remove #(str/starts-with? % "--") *command-line-args*)) "."))
+(def APP "appview/analytics-mcp-component")
+
+(def claims
+  {:tracked-files 26
+   :preserved-bytes 32685              ; 移行が 1 バイトも触っていない 13 ファイル
+   :appview-ts-or-svelte-files 0
+   :kotoba-ts-files 5                  ; 移行対象外の参照実装スライス（README §「移していないもの」）
+   :canonical-source-files 4           ; src/ + test/ の .cljc/.cljs
+   :declared-vars 8
+   :declared-routes 1
+   :declared-capabilities 8
+   :wrangler-main "../../dist/worker.js"
+   :framework "cljs-esm-worker"
+   :shadow-output-dir "dist"
+   :shadow-export "analytics.worker/handler"})
+
+;; 移行が 1 バイトも変えていないファイル。wrangler.jsonc は**意図的に変更**した
+;; ので、ここではなく下の内容 claim で検査する。
+(def preserved
+  {"MIGRATION-TODO.md" "2176c085c2064af787ca6f2a9433af58b1449e28dfe8edba409744bb65cfb45d"
+   "NOTICE" "9ebc4400fead0a3d62f4c05d1499f2d3bd61b6b4a2fcff988d653c3c662c9c25"
+   "README.edn" "9da1fd83f5c7d70400b69354a59c0d67d52829292c323ee2c340bd3800411653"
+   "migration.edn" "f0ca3529d6e81d4c4ee6731d9795ec4fd5df46a62d318362ba792abf7079a74c"
+   "appview/analytics-mcp-component/kotodama.jsonld" "9f9a63464b1d145acd1fcb1430815d086de9a26adda4881ec25654e8922c0c56"
+   "bpmn/analytics.bpmn" "65010171674b7bb177007b045774aea8733f1574b4e4810e937309c663443c77"
+   "kotoba/package.json" "44dc2f3119e64e7a85f131763709bd514c2d03341f7affd7c13662de19ef4643"
+   "kotoba/src/index.ts" "f38c912a520d6305a49d3974b103273934ec84c65bb0501e1da32af9b2e1a6a2"
+   "kotoba/src/registry.ts" "34900336fe0393a611480b4d49123d527f465ada664d1f1dc3114ac41f011f5e"
+   "kotoba/src/types.ts" "907befef73b54467e54d2b2fe01907f9780a745a8ebef9c8afe3a462d699f606"
+   "kotoba/test/analytics.test.ts" "2f4788203cd327bf8ce876042032062a5c52857c405d0290e3f5cc8d6283a0dd"
+   "kotoba/tsconfig.json" "95a429e51d6162cb7205b603f745e7604d93ffbb1ea6c346e5c6215a79ae541e"
+   "kotoba/vitest.config.ts" "f82a551ef4da1c9cbf17985a3bee96eee450a3e4a46bff0d96c6150263121eff"})
+
+;; 移行が**撤去**したもの、パス名で。バイト合計は「TypeScript が消えた」と
+;; 言えない。これは言えるし、どれか 1 つでも戻れば落ちる。
+(def removed-by-migration
+  ["appview/analytics-mcp-component/src/app.ts"
+   "appview/analytics-mcp-component/package.json"
+   "appview/analytics-mcp-component/svelte/package.json"
+   "appview/analytics-mcp-component/svelte/src/app.html"
+   "appview/analytics-mcp-component/svelte/src/routes/+page.svelte"
+   "appview/analytics-mcp-component/svelte/src/routes/xrpc/[...path]/+server.ts"
+   "appview/analytics-mcp-component/svelte/svelte.config.js"
+   "appview/analytics-mcp-component/svelte/tsconfig.json"
+   "appview/analytics-mcp-component/svelte/vite.config.ts"])
+
+(def undetermined (atom []))
+(def failures (atom []))
+(defn undet! [m] (swap! undetermined conj m))
+
+(defn tracked-files []
+  (try (->> (.execSync cp "git -c core.fsmonitor=false ls-files"
+                       #js {:cwd root :encoding "utf8"})
+            str/split-lines (remove str/blank?) vec)
+       (catch :default e (undet! (str "git ls-files failed: " (.-message e))) nil)))
+(defn slurp* [rel] (try (.readFileSync fs (str root "/" rel) "utf8") (catch :default _ nil)))
+(defn bytes-of [rel] (try (.-size (.statSync fs (str root "/" rel))) (catch :default _ nil)))
+(defn sha256 [rel]
+  (try (-> (.createHash crypto "sha256")
+           (.update (.readFileSync fs (str root "/" rel)))
+           (.digest "hex"))
+       (catch :default _ nil)))
+(defn strip-jsonc [s] (str/replace s #"(?m)^\s*//.*$" ""))
+(defn parse-json [s] (try (js->clj (.parse js/JSON s) :keywordize-keys false)
+                          (catch :default _ nil)))
+
+(defn check! [label expected actual]
+  (let [ok (= expected actual)]
+    (println (str (if ok "PASS" "FAIL") "\t" (name label)
+                  "\texpected=" (pr-str expected) "\tactual=" (pr-str actual)))
+    (when-not ok (swap! failures conj label))
+    ok))
+
+(let [files (tracked-files)]
+  (when (nil? files) (println "UNDETERMINED\tcould not list tracked files") (js/process.exit 2))
+  (println (str "SCANNED\t" (count files)))
+  ;; 入力ゼロを clean と読ませない床。
+  (when (zero? (count files)) (println "UNDETERMINED\tscanned 0 files") (js/process.exit 2))
+
+  (let [sizes (into {} (map (juxt identity bytes-of)) files)]
+    (when-let [bad (seq (keep (fn [[f s]] (when (nil? s) f)) sizes))]
+      (undet! (str "tracked but unreadable: " (str/join ", " bad))))
+
+    (check! :tracked-files (:tracked-files claims) (count files))
+    (check! :preserved-bytes (:preserved-bytes claims)
+            (reduce + 0 (keep #(get sizes %) (keys preserved))))
+    (check! :preserved-files-unchanged []
+            (vec (keep (fn [[f want]]
+                         (let [got (sha256 f)]
+                           (when-not (= want got) (str f " " (or got "MISSING")))))
+                       preserved)))
+
+    ;; TypeScript / Svelte は appview から消えた、パス名で
+    (check! :removed-by-migration-absent []
+            (vec (filter #(some? (bytes-of %)) removed-by-migration)))
+    (check! :appview-ts-or-svelte-files (:appview-ts-or-svelte-files claims)
+            (count (filter #(and (str/starts-with? % (str APP "/"))
+                                 (re-find #"\.(ts|svelte|js|mjs|cjs)$" %))
+                           files)))
+    ;; 移行対象外の参照実装スライス。黙って増えたり消えたりしないよう固定する。
+    (check! :kotoba-ts-files (:kotoba-ts-files claims)
+            (count (filter #(and (str/starts-with? % "kotoba/") (str/ends-with? % ".ts")) files)))
+    (check! :canonical-source-files (:canonical-source-files claims)
+            (count (filter #(and (or (str/starts-with? % "src/") (str/starts-with? % "test/"))
+                                 (re-find #"\.(cljs|cljc|clj|kotoba)$" %))
+                           files)))
+
+    ;; deploy される bundle は、この tree のソースからビルドされる
+    (let [w (some-> (slurp* (str APP "/wrangler.jsonc")) strip-jsonc parse-json)
+          k (some-> (slurp* (str APP "/kotodama.jsonld")) parse-json)
+          sh (slurp* "shadow-cljs.edn")]
+      (if (or (nil? w) (nil? k) (nil? sh))
+        (undet! "wrangler.jsonc / kotodama.jsonld / shadow-cljs.edn unreadable")
+        (do
+          (check! :wrangler-main (:wrangler-main claims) (get w "main"))
+          (check! :declared-vars (:declared-vars claims) (count (get w "vars")))
+          (check! :declared-routes (:declared-routes claims) (count (get w "routes")))
+          (check! :framework (:framework claims) (get-in w ["vars" "APP_FRAMEWORK"]))
+          ;; 旧 config は消える SvelteKit client dir を serve していた
+          (check! :no-stale-assets-binding true (nil? (get w "assets")))
+          ;; .wasm は tree に 1 つも無いので CompiledWasm の rule は inert だった
+          (check! :no-wasm-in-tree true (empty? (filter #(str/ends-with? % ".wasm") files)))
+          (check! :no-compiled-wasm-rule true (nil? (get w "rules")))
+          (check! :shadow-builds-that-main true
+                  (and (str/includes? sh (str ":output-dir \"" (:shadow-output-dir claims) "\""))
+                       (str/includes? sh (:shadow-export claims))
+                       (str/includes? (str (get w "main"))
+                                      (str (:shadow-output-dir claims) "/worker.js"))))
+          ;; 2 つの設定ファイルが同じ capability 一覧を宣言していること。
+          ;; 移行はこれを直さない（どちらも移行前から在る）が、片方だけ動くのを
+          ;; 見えるようにする。
+          (let [wc (parse-json (get-in w ["vars" "APP_CAPABILITIES"]))
+                kc (get-in k ["profile" "capabilities"])]
+            (check! :declared-capabilities (:declared-capabilities claims) (count wc))
+            (check! :capabilities-agree-across-config true (= wc kc))))))
+
+    ;; ページは route **表**を描く。焼いた数ではない —— 移行前のページは
+    ;; `routeCount: 0` を literal で持っていて、隣の wrangler.jsonc が route 1 を
+    ;; 宣言していることに気づけなかった。構造で主張する（部分文字列の禁止では
+    ;; ない: 「旧欠陥を説明する docstring」で落ちる検査は散文についての検査で
+    ;; あって、コードについての検査ではない）。
+    (let [v (slurp* "src/analytics/view.cljc")
+          w (slurp* "src/analytics/worker.cljs")]
+      (if (or (nil? v) (nil? w))
+        (undet! "view.cljc or worker.cljs unreadable")
+        (check! :page-renders-route-table true
+                (and (str/includes? v "[{:keys [routes vars mcp-url actor-did built-at]}]")
+                     (str/includes? v "(route-rows routes)")
+                     (str/includes? w ":routes route/routes")))))))
+
+(let [u @undetermined f @failures]
+  (when (seq u)
+    (doseq [m u] (println (str "UNDETERMINED\t" m)))
+    (println "Refusing to report a pass: the tree could not be read completely.")
+    (js/process.exit 2))
+  (if (seq f)
+    (do (println (str "FAILED\t" (count f) " claim(s): " (str/join ", " (map name f))))
+        (js/process.exit 1))
+    (do (println "OK\tevery claim in README.md and docs/operator-quickstart.md holds")
+        (js/process.exit 0))))

@@ -214,6 +214,34 @@ shadow-cljs - starting via "clojure"
 先に出るが、どちらも致命ではない（前者は npm に入れず `clojure` 経由で回して
 いるため、後者は protobuf-java が JDK の非推奨 API を呼ぶため）。
 
+### 壊れた var はビルドを **落とす**（2026-08-18 実測）
+
+`shadow-cljs.edn` の `:compiler-options` に `:warnings-as-errors true` を入れた。
+入れる前は、存在しない var を参照しても shadow は **WARNING** を出して **exit 0**
+し、最初のリクエストで `Cannot read properties of undefined` を投げる bundle を
+書いていた ——「ビルドが通った」は検査ではなかった（**落ちようがなかった**）。
+
+この repo で実際に落として確かめた。`src/analytics/worker.cljs:123` の
+`route/dispatch` を、存在しない `route/dispatch-nonexistent` に改名して再ビルドする:
+
+```
+------ ERROR -------------------------------------------------------------------
+ File: src/analytics/worker.cljs:123:44
+```
+
+| | exit | `dist/worker.js` sha256 | bytes |
+|---|---|---|---|
+| 改名前 | **0** | `34a1ade5…40321386` | 246174 |
+| 改名後 | **1** | `34a1ade5…40321386`（**不変**） | 246174 |
+| 戻して再ビルド | **0** | `34a1ade5…40321386` | 246174 |
+
+**落ちたビルドは bundle を出荷しない** —— sha256 が 1 バイトも動いていないことが
+それを言っている。
+
+キーは `:build-options` ではなく **`:compiler-options`** に置く。shadow が読むのは
+`[:compiler-options :warnings-as-errors]` で、置き場所を間違えると**黙って無視される**
+—— この option が防ぐはずの失敗（落ちようのない検査）そのものになる。
+
 ## §7 ビルドした成果物を実際に叩く ✅
 
 ここが **deploy されるものに触る唯一の検査**である。§4 のテストはソースの判断を

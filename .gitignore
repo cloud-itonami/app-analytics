@@ -1,0 +1,11 @@
+# shadow-cljs のビルド出力。wrangler.jsonc の main が指す先だが、生成物なので
+# commit しない（scripts/smoke-worker.cljs は「ビルドしてから」実行する gate で、
+# bundle が無ければ exit 2 = 判定できなかった、を返す）。
+dist/
+.shadow-cljs/
+node_modules/
+.cpcache/
+
+# wrangler / npm がローカルで書くもの。この repo は package-lock.json を追跡しない。
+.wrangler/
+package-lock.json

@@ -1,39 +1,25 @@
 {
   "name": "kotodama-pbhsahxt",
-  "main": "svelte/.svelte-kit/cloudflare/_worker.js",
+  // Compiled from src/analytics/worker.cljs by shadow-cljs (:target :esm).
+  // Before the cljs migration this pointed at "svelte/.svelte-kit/cloudflare/_worker.js"
+  // -- a path that is not in this tree -- and the TypeScript a reader opened
+  // (src/app.ts) was in no bundle at all. See docs/adr/0001.
+  "main": "../../dist/worker.js",
   "compatibility_date": "2025-03-17",
-  "compatibility_flags": [
-    "nodejs_compat",
-    "nodejs_als"
-  ],
   "vars": {
     "APP_CAPABILITIES": "[\"createDashboard\",\"recordEvent\",\"listDashboards\",\"getDashboard\",\"listEvents\",\"getMetrics\",\"createReport\",\"listReports\"]",
     "APP_DESCRIPTION": "analytics — Analytics intelligence — metrics, dashboards, reports, funnel analysis",
     "APP_DISPLAY_NAME": "Analytics",
-    "APP_FRAMEWORK": "sveltekit-edge-bff",
+    "APP_FRAMEWORK": "cljs-esm-worker",
     "APP_NANOID": "pbhsahxt",
     "APP_PERFORMER_TYPE": "service",
     "APP_UI_TYPE": "yoro",
     "AGENTGATEWAY_MCP_ROUTER_URL": "https://mcp.etzhayyim.com/xrpc/com.etzhayyim.mcp.message"
   },
-  "rules": [
-    {
-      "type": "CompiledWasm",
-      "globs": [
-        "**/*.wasm"
-      ]
-    }
-  ],
   "routes": [
     {
       "pattern": "pbhsahxt.etzhayyim.com/*",
       "zone_name": "etzhayyim.com"
     }
-  ],
-  "assets": {
-    "directory": "./svelte/.svelte-kit/cloudflare/client",
-    "binding": "ASSETS",
-    "html_handling": "auto-trailing-slash",
-    "not_found_handling": "none"
-  }
+  ]
 }

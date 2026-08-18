@@ -1,0 +1,24 @@
+;; app-analytics — the analytics appview.
+;;
+;; The Worker is ClojureScript, per the repo-wide runtime order in the
+;; superproject CLAUDE.md (kotoba wasm > clojurewasm > ClojureScript > nbb).
+;; Keeping the entry in cljs rather than .kotoba is ADR-2606290000's standing
+;; call: kotoba's ingress capability is :native-aot/:wasm-aot pending. The
+;; decision-shaped parts live in .cljc so they are testable without a browser,
+;; and are the first thing that moves to .kotoba when ingress qualifies.
+;;
+;; The jp-go-dds pin is the sha the tests in test/ are actually run against
+;; (the west checkout at orgs/kotoba-lang/jp-go-digital-design-system), so the
+;; bundle and the test run cannot be looking at two different design systems.
+{:paths ["src"]
+ :deps {io.github.kotoba-lang/jp-go-digital-design-system
+        {:git/url "https://github.com/kotoba-lang/jp-go-digital-design-system"
+         :git/sha "0a0218052b0d563057341a1c2ab310045052bd23"}}
+ :aliases
+ {:cljs {:extra-deps {org.clojure/clojurescript {:mvn/version "1.11.132"}
+                      thheller/shadow-cljs {:mvn/version "2.28.20"}}}
+  :test {:extra-paths ["test"]
+         :extra-deps {io.github.cognitect-labs/test-runner
+                      {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+         :main-opts ["-m" "cognitect.test-runner"]
+         :exec-fn cognitect.test-runner.api/test}}}

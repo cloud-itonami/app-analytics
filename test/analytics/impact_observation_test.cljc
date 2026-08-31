@@ -163,3 +163,35 @@
                           (assoc proposal :proposal/ranking [{:subject/id "w1" :rank 1}])
                           (assoc proposal :proposal/claims ["work X caused adoption Y"])]]
           (is (false? (io/hyakka-readback-accept? proposal tampered))))))))
+
+(deftest dedupe-key-identity
+  (testing "same subject/window/method/tallies => same key regardless of map order"
+    (let [obs1 (observation [(signal {}) (signal {:content-hash "d" :observed-at 1700000200})] "mv-1")
+          obs2 (observation [(signal {}) (signal {:content-hash "d" :observed-at 1700000200})] "mv-1")]
+      (is (some? (io/dedupe-key obs1)))
+      (is (= (io/dedupe-key obs1) (io/dedupe-key obs2)))
+      (is (re-matches #"influence-observation/v1:.*" (io/dedupe-key obs1)))))
+  (testing "different tallies => different key (a changed measurement is not the same observation)"
+    (let [obs1 (observation [(signal {})] "mv-1")
+          obs2 (observation [(signal {}) (signal {:content-hash "e" :observed-at 1700000300})] "mv-1")]
+      (is (not= (io/dedupe-key obs1) (io/dedupe-key obs2)))))
+  (testing "different method-version => different key"
+    (let [obs (observation [(signal {})] "mv-1")]
+      (is (not= (io/dedupe-key obs)
+                (io/dedupe-key (assoc obs :method-version "mv-2"))))))
+  (testing "degenerate observation (no subject/window) => nil, never a fabricated key"
+    (is (nil? (io/dedupe-key {:tallies {:tally/scholarly-citation 1}})))))
+
+(deftest hyakka-proposal-carries-dedupe-key-and-readback-rejects-mutation
+  (let [obs (observation [(signal {})] "mv-1")
+        proposal (io/hyakka-proposal obs)]
+    (testing "proposal carries the dedupe key"
+      (is (= (io/dedupe-key obs) (:proposal/dedupe-key proposal))))
+    (testing "faithful readback accepted"
+      (is (true? (io/hyakka-readback-accept? proposal proposal))))
+    (testing "re-keyed readback (same measurement re-proposed under a new key) refused"
+      (is (false? (io/hyakka-readback-accept?
+                   proposal (assoc proposal :proposal/dedupe-key "influence-observation/v1:spoof")))))
+    (testing "readback with the key stripped refused"
+      (is (false? (io/hyakka-readback-accept?
+                   proposal (dissoc proposal :proposal/dedupe-key)))))))

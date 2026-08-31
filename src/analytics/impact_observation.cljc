@@ -194,6 +194,26 @@
 ;; Hyakka proposal / readback
 ;; ---------------------------------------------------------------------------
 
+;; ---------------------------------------------------------------------------
+;; Dedupe identity — one key per measured observation
+;; ---------------------------------------------------------------------------
+
+(defn dedupe-key
+  "Deterministic identity for one observation. Two runs over the same subject,
+  window, method-version and tallies MUST produce the same key so Hyakka can
+  refuse duplicate proposals instead of accumulating copies of one
+  measurement. Tallies are sorted before serialization so map iteration
+  order never leaks into the key. Pure string — no crypto, no clock."
+  [obs]
+  (when (and (map? (:subject obs)) (map? (:window obs)))
+    (str "influence-observation/v1:"
+         (pr-str {:subject (:subject obs)
+                  :window (:window obs)
+                  :method-version (:method-version obs)
+                  :tallies (into (sorted-map) (:tallies obs))}))))
+
+;; ---------------------------------------------------------------------------
+
 (defn hyakka-proposal
   "Proposal payload for the Hyakka wiki (network-awai/app-hyakka), or nil when
   nothing was measured. Absence is not zero: with no admitted signals there is
@@ -202,6 +222,7 @@
   [obs]
   (when (pos? (long (or (:admitted-count obs) 0)))
     {:proposal/type :influence-observation
+     :proposal/dedupe-key (dedupe-key obs)
      :proposal/contract "influence-observation/v1"
      :proposal/method-version (:method-version obs)
      :proposal/subject (:subject obs)
@@ -223,6 +244,8 @@
   [proposal readback]
   (and (map? readback)
        (= "influence-observation/v1" (:proposal/contract readback))
+       (some? (:proposal/dedupe-key readback))
+       (= (:proposal/dedupe-key proposal) (:proposal/dedupe-key readback))
        (= (:proposal/method-version proposal) (:proposal/method-version readback))
        (= (:proposal/subject proposal) (:proposal/subject readback))
        (= (:proposal/window proposal) (:proposal/window readback))

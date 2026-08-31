@@ -209,6 +209,10 @@
      :proposal/tallies (:tallies obs)
      :proposal/flags (:flags obs)
      :proposal/coverage :partial
+     :proposal/ranking nil
+     :proposal/ranking-forbidden true
+     :proposal/causal-claims-forbidden true
+     :proposal/claims []
      :proposal/note "metric-is-a-versioned-observation-not-timeless-impact"}))
 
 (defn hyakka-readback-accept?
@@ -227,4 +231,10 @@
        (some? (:proposal/flags readback))
        (every? #(contains? (:proposal/flags readback) %)
                [:missing-is-unmeasured :coverage])
-       (= :partial (:proposal/coverage readback))))
+       (= :partial (:proposal/coverage readback))
+       ;; structural guards must survive the round-trip: a readback whose
+       ;; safety refusals were stripped is NOT the proposal this actor made.
+       (true? (:proposal/ranking-forbidden readback))
+       (true? (:proposal/causal-claims-forbidden readback))
+       (nil? (:proposal/ranking readback))
+       (empty? (:proposal/claims readback))))

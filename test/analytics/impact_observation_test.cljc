@@ -156,4 +156,10 @@
       (is (false? (io/hyakka-readback-accept? proposal
                                               (assoc-in proposal [:proposal/contract] "universal-score/v9"))))
       (is (false? (io/hyakka-readback-accept? proposal
-                                              (assoc-in proposal [:proposal/flags :missing-is-unmeasured] false)))))))
+                                              (assoc-in proposal [:proposal/flags :missing-is-unmeasured] false))))
+      (testing "stripped structural guards are refused"
+        (doseq [tampered [(dissoc proposal :proposal/ranking-forbidden)
+                          (dissoc proposal :proposal/causal-claims-forbidden)
+                          (assoc proposal :proposal/ranking [{:subject/id "w1" :rank 1}])
+                          (assoc proposal :proposal/claims ["work X caused adoption Y"])]]
+          (is (false? (io/hyakka-readback-accept? proposal tampered))))))))

@@ -101,3 +101,11 @@
          (route/dispatch "POST" "/observations/window-refresh")))
   (testing "the surface is declared in the route table the page renders"
     (is (some #(= "/observations/window-refresh" (:route/path %)) route/routes))))
+
+(deftest dispatch-retraction-readback
+  (is (= {:action :retraction-observation}
+         (route/dispatch "GET" "/observations/retraction")))
+  (is (= {:action :method-not-allowed :allow "GET"}
+         (route/dispatch "POST" "/observations/retraction")))
+  (testing "the surface is declared in the route table the page renders"
+    (is (some #(= "/observations/retraction" (:route/path %)) route/routes))))

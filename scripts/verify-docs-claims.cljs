@@ -21,11 +21,11 @@
 (def APP "appview/analytics-mcp-component")
 
 (def claims
-  {:tracked-files 26
+  {:tracked-files 38
    :preserved-bytes 32685              ; 移行が 1 バイトも触っていない 13 ファイル
    :appview-ts-or-svelte-files 0
    :kotoba-ts-files 5                  ; 移行対象外の参照実装スライス（README §「移していないもの」）
-   :canonical-source-files 4           ; src/ + test/ の .cljc/.cljs
+   :canonical-source-files 16          ; src/ + test/ の .cljc/.cljs
    :declared-vars 8
    :declared-routes 1
    :declared-capabilities 8

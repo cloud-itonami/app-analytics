@@ -16,6 +16,7 @@
             [analytics.view :as view]
             [analytics.window-refresh :as wr]
             [analytics.retraction-observation :as ro]
+            [analytics.attribution-observation :as ao]
             [shadow.resource :as rc]
             [clojure.string :as str]))
 
@@ -159,6 +160,9 @@
       :retraction-observation (observation-response
                                env "RETRACTION_OBSERVATION_JSON"
                                ro/configure-observation)
+      :attribution-observation (observation-response
+                                env "ATTRIBUTION_OBSERVATION_JSON"
+                                ao/configure-observation)
       :xrpc   (proxy-xrpc req env nsid)
       :cors-preflight (->response nil {:status 204
                                        :content-type "text/plain"

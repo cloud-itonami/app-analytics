@@ -109,3 +109,11 @@
          (route/dispatch "POST" "/observations/retraction")))
   (testing "the surface is declared in the route table the page renders"
     (is (some #(= "/observations/retraction" (:route/path %)) route/routes))))
+
+(deftest dispatch-attribution-readback
+  (is (= {:action :attribution-observation}
+         (route/dispatch "GET" "/observations/attribution")))
+  (is (= {:action :method-not-allowed :allow "GET"}
+         (route/dispatch "POST" "/observations/attribution")))
+  (testing "the surface is declared in the route table the page renders"
+    (is (some #(= "/observations/attribution" (:route/path %)) route/routes))))

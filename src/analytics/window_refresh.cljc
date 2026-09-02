@@ -284,3 +284,44 @@
        (true? (:proposal/causal-claims-forbidden readback))
        (nil? (:proposal/ranking readback))
        (empty? (:proposal/claims readback))))
+
+;; ---------------------------------------------------------------------------
+;; Public readback surface — /observations/window-refresh
+;; ---------------------------------------------------------------------------
+
+(defn- minimal-shape-ok? [obs]
+  (and (map? obs)
+       (= "window-refresh-observation" (:contract obs))
+       (= "v1" (:version obs))
+       (integer? (:as-of obs))
+       (sequential? (:window-series obs))))
+
+(defn configure-observation
+  "The pure decision behind the `GET /observations/window-refresh` readback
+  surface. The Worker has no store of its own: the latest observation record
+  reaches the edge the same way every other setting does — the deploy-time
+  `WINDOW_REFRESH_OBSERVATION_JSON` env, already JSON-parsed by the caller.
+
+  Returns a tagged result, never a fabricated observation:
+
+    [:not-configured {:note …}] — no record is configured on this deploy.
+      Absence of a configured record is NOT a measurement: it is not zero
+      windows, not staleness, not a gap. The caller answers 404 and the
+      note says so verbatim.
+    [:invalid :reason] — something was configured but it is not a
+      window-refresh-observation/v1 record. Serve 502 rather than guessing
+      which parts of a foreign shape are meaningful.
+    [:ok obs] — serve the record verbatim, unmodified, flags intact."
+  [parsed]
+  (cond
+    (nil? parsed)
+    [:not-configured
+     {:note "no window-refresh observation is configured on this deploy; absence of a configured record is not a measurement"}]
+
+    (not (map? parsed))
+    [:invalid :not-a-json-object]
+
+    (not (minimal-shape-ok? parsed))
+    [:invalid :not-a-window-refresh-observation/v1-record]
+
+    :else [:ok parsed]))

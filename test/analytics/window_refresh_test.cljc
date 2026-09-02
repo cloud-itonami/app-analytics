@@ -168,3 +168,34 @@
                    (assoc p :proposal/claims [{:text "impact is growing"}]))))
       (is (not (wr/hyakka-readback-accept? p
                    (dissoc p :proposal/dedupe-key)))))))
+
+(deftest readback-surface-test
+  (testing "unconfigured deploy: absence is not a measurement"
+    (let [[tag payload] (wr/configure-observation nil)]
+      (is (= :not-configured tag))
+      (is (string? (:note payload)))
+      (is (re-find #"not a measurement" (:note payload)))))
+
+  (testing "invalid shapes are refused, not guessed at"
+    (is (= [:invalid :not-a-json-object] (wr/configure-observation "x")))
+    (is (= [:invalid :not-a-window-refresh-observation/v1-record]
+           (wr/configure-observation {})))
+    (is (= [:invalid :not-a-window-refresh-observation/v1-record]
+           (wr/configure-observation {:contract "window-refresh-observation"
+                                      :version "v2"
+                                      :as-of 5000
+                                      :window-series []})))
+    (is (= [:invalid :not-a-window-refresh-observation/v1-record]
+           (wr/configure-observation {:contract "window-refresh-observation"
+                                      :version "v1"
+                                      :as-of "5000"
+                                      :window-series []}))))
+
+  (testing "a record this contract built round-trips verbatim"
+    (let [o (second (wr/build-observation "mv-1" [influence-obs] 5000 subject))
+          [tag served] (wr/configure-observation o)]
+      (is (= :ok tag))
+      (is (= o served))
+      (is (true? (:trend-forbidden served)))
+      (is (true? (:ranking-forbidden served)))
+      (is (= :partial (get-in served [:flags :coverage]))))))

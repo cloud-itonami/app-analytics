@@ -14,6 +14,7 @@
   （先例 `listingops.edge.worker` と同じ約束）。"
   (:require [analytics.route :as route]
             [analytics.view :as view]
+            [analytics.window-refresh :as wr]
             [shadow.resource :as rc]
             [clojure.string :as str]))
 
@@ -117,6 +118,27 @@
     :content-type "text/html; charset=utf-8"
     :cache "public, max-age=60"}))
 
+(defn- observation-response
+  "`GET /observations/window-refresh`. The decision is route-agnostic and
+  lives in `analytics.window-refresh/configure-observation`; this layer only
+  parses the deploy-time JSON and maps the tagged result to a status:
+  :ok → 200 (record verbatim), :not-configured → 404 (absence is not a
+  measurement, so no zero-shaped body), :invalid → 502 (something is
+  configured but it is not this contract's record — do not guess)."
+  [env]
+  (let [raw (when env (aget env "WINDOW_REFRESH_OBSERVATION_JSON"))
+        parsed (when raw
+                 (try (js->clj (js/JSON.parse raw) :keywordize-keys true)
+                      (catch :default ::unparseable)))
+        [tag payload] (wr/configure-observation
+                       (when-not (= ::unparseable parsed) parsed))]
+    (case tag
+      :ok (json payload 200)
+      :not-configured (json {:error "observation-not-configured"
+                             :note (:note payload)}
+                            404)
+      :invalid (json {:error "observation-invalid" :reason payload} 502))))
+
 (defn fetch-handler [req env _ctx]
   (let [url (js/URL. (.-url req))
         path (.-pathname url)
@@ -131,6 +153,7 @@
                                                 " " (:route/path r)))
                                    route/routes)}
                     200)
+      :window-refresh-observation (observation-response env)
       :xrpc   (proxy-xrpc req env nsid)
       :cors-preflight (->response nil {:status 204
                                        :content-type "text/plain"

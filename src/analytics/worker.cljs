@@ -15,6 +15,7 @@
   (:require [analytics.route :as route]
             [analytics.view :as view]
             [analytics.window-refresh :as wr]
+            [analytics.retraction-observation :as ro]
             [shadow.resource :as rc]
             [clojure.string :as str]))
 
@@ -125,19 +126,20 @@
   :ok → 200 (record verbatim), :not-configured → 404 (absence is not a
   measurement, so no zero-shaped body), :invalid → 502 (something is
   configured but it is not this contract's record — do not guess)."
-  [env]
-  (let [raw (when env (aget env "WINDOW_REFRESH_OBSERVATION_JSON"))
+  ([env] (observation-response env "WINDOW_REFRESH_OBSERVATION_JSON" wr/configure-observation))
+  ([env env-var configure-observation]
+   (let [raw (when env (aget env env-var))
         parsed (when raw
                  (try (js->clj (js/JSON.parse raw) :keywordize-keys true)
                       (catch :default ::unparseable)))
-        [tag payload] (wr/configure-observation
+        [tag payload] (configure-observation
                        (when-not (= ::unparseable parsed) parsed))]
     (case tag
       :ok (json payload 200)
       :not-configured (json {:error "observation-not-configured"
                              :note (:note payload)}
                             404)
-      :invalid (json {:error "observation-invalid" :reason payload} 502))))
+      :invalid (json {:error "observation-invalid" :reason payload} 502)))))
 
 (defn fetch-handler [req env _ctx]
   (let [url (js/URL. (.-url req))
@@ -154,6 +156,9 @@
                                    route/routes)}
                     200)
       :window-refresh-observation (observation-response env)
+      :retraction-observation (observation-response
+                               env "RETRACTION_OBSERVATION_JSON"
+                               ro/configure-observation)
       :xrpc   (proxy-xrpc req env nsid)
       :cors-preflight (->response nil {:status 204
                                        :content-type "text/plain"

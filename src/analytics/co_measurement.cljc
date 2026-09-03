@@ -28,7 +28,16 @@
   Pure functions only: no network, no clock, no file I/O. Determinism is a
   test fixture (byte-identical pr-str across runs).")
 
-(require '[analytics.observation-conflict :as oc])
+;; Local identity key — byte-identical semantics to
+;; analytics.observation-conflict/identity-key (PR #11) without a cross-branch
+;; dependency: subject verbatim + window bounds + method-version verbatim,
+;; pr-str-ed. Grouping output (and therefore every derived record and dedupe
+;; key) is unchanged.
+(defn- identity-key
+  [o]
+  (pr-str {:subject (:subject o)
+           :window {:from (:from (:window o)) :to (:to (:window o))}
+           :method-version (:method-version o)}))
 
 ;; ---------------------------------------------------------------------------
 ;; Validation — only influence-observation/v1-shaped records are consumed
@@ -90,7 +99,7 @@
   order never leaks into the derived record."
   [history]
   (->> history
-       (group-by oc/identity-key)
+       (group-by identity-key)
        (into (sorted-map)
              (map (fn [[k rs]] [k (analyze-group rs)])))))
 

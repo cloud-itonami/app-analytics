@@ -272,12 +272,9 @@
   (let [[verdict lineage] (accept [(sig)] (stored))]
     (is (= :accepted verdict))
     (is (= :partial (get-in lineage [:flags :coverage])))))
-
 ;; ---------------------------------------------------------------------------
 ;; Runner
 ;; ---------------------------------------------------------------------------
 
-(defn -main []
-  (let [{:keys [fail error]} (run-tests)]
-    (when (or (pos? fail) (pos? error))
-      (js/process.exit 1))))
+(defn ^:export run []
+  (run-tests (quote analytics.evidence-lineage-observation-test)))

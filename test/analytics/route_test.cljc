@@ -93,3 +93,19 @@
       (is (str/includes? html "https://elsewhere.example"))
       (testing "他の route 表の path が漏れ込んでいない"
         (is (not (str/includes? html "/health")))))))
+
+(deftest dispatch-window-refresh-readback
+  (is (= {:action :window-refresh-observation}
+         (route/dispatch "GET" "/observations/window-refresh")))
+  (is (= {:action :method-not-allowed :allow "GET"}
+         (route/dispatch "POST" "/observations/window-refresh")))
+  (testing "the surface is declared in the route table the page renders"
+    (is (some #(= "/observations/window-refresh" (:route/path %)) route/routes))))
+
+(deftest dispatch-retraction-readback
+  (is (= {:action :retraction-observation}
+         (route/dispatch "GET" "/observations/retraction")))
+  (is (= {:action :method-not-allowed :allow "GET"}
+         (route/dispatch "POST" "/observations/retraction")))
+  (testing "the surface is declared in the route table the page renders"
+    (is (some #(= "/observations/retraction" (:route/path %)) route/routes))))

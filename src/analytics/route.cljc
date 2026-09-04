@@ -53,7 +53,11 @@
    {:route/path "/xrpc/:nsid"  :route/method :post    :route/kind :proxy
     :route/doc "XRPC を MCP router へ中継する"}
    {:route/path "/xrpc/:nsid"  :route/method :options :route/kind :cors
-    :route/doc "CORS preflight"}])
+    :route/doc "CORS preflight"}
+   {:route/path "/observations/window-refresh" :route/method :get :route/kind :json
+    :route/doc "window-refresh-observation/v1 の読み出し面。設定された観測レコードをそのまま返す。無ければ 404 — 不在は 0 に着替えない"}
+   {:route/path "/observations/retraction" :route/method :get :route/kind :json
+    :route/doc "retraction-observation/v1 の読み出し面。設定された観測レコードをそのまま返す。無ければ 404 — 不在は 0 に着替えない"}])
 
 (defn- url-decode
   "percent-encoding を解く。SvelteKit は route param を decode 済みで渡すので、
@@ -107,6 +111,16 @@
       (= p "/") (if (= m :get)
                   {:action :page}
                   {:action :method-not-allowed :allow "GET"})
+
+      (= p "/observations/window-refresh")
+      (if (= m :get)
+        {:action :window-refresh-observation}
+        {:action :method-not-allowed :allow "GET"})
+
+      (= p "/observations/retraction")
+      (if (= m :get)
+        {:action :retraction-observation}
+        {:action :method-not-allowed :allow "GET"})
 
       :else {:action :not-found})))
 

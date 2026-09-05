@@ -34,6 +34,19 @@
            (:route/doc r)])
         routes))
 
+(defn- observation-routes
+  "route 表のうち観測 readback 面（`/observations/…`）だけを、データから拾う。
+  ページに route 名を焼かない —— 実際に答える route 表が正であり、ここは
+  その射影である。"
+  [routes]
+  (filterv #(str/starts-with? (:route/path %) "/observations/") routes))
+
+(defn- observation-doc-lines
+  [routes]
+  (mapv (fn [r] [:li [:span {:class "an-mono"} (:route/path r)]
+                 " — " (:route/doc r)])
+        routes))
+
 (defn body
   "opts:
    :routes    analytics.route/routes（この Worker が実際に答えるもの）
@@ -49,7 +62,16 @@
     [:p {:class "an-lede"}
      "ダッシュボード・集計メトリクス・レポートを扱う analytics サービスの"
      "公開面（appview）。集計と保存そのものはここには無く、この面は XRPC を"
-     "MCP router へ中継するだけの thin edge である。"])
+     "MCP router へ中継する thin edge であり、加えて観測レコードの readback 面"
+     "（下記）を持つ。中継も readback も store を持たない。"])
+
+   (dds/section
+    {:title "観測 readback 面"}
+    (into [:ul] (observation-doc-lines (observation-routes routes)))
+    [:p {:class "an-note"}
+     "どの観測も、設定されたレコードが無ければ 404 で答える —— 不在は 0 に"
+     "着替えない。設定されたものがその契約のレコードでなければ 502 —— "
+     "他人の形を部分的に解釈しない。"])
 
    (dds/section
     {:title "この面が答えるもの"}

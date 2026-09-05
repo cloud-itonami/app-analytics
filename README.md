@@ -61,12 +61,12 @@ SvelteKit の route が `[...path]`（rest param）だったので、`/xrpc/a/b`
 測って記録した）。上流も binding も要らない経路なので足した。それ以外の
 status code・ヘッダ・中継の封筒の形は移行前と同じである。
 
-## いま在るもの — 26 ファイル
+## いま在るもの — 38 ファイル
 
 | 面 | ファイル |
 |---|---|
 | 判断・描画・edge | `src/analytics/{route.cljc, view.cljc, worker.cljs}` |
-| テスト | `test/analytics/route_test.cljc`（7 tests / 46 assertions） |
+| テスト | `test/analytics/*_test.cljc`（7 本・70 tests / 364 assertions、2026-09-03 実測） |
 | ビルド | `deps.edn` / `shadow-cljs.edn` / `.gitignore` |
 | Worker 設定 | `appview/analytics-mcp-component/wrangler.jsonc` |
 | actor 記述子 | `appview/analytics-mcp-component/kotodama.jsonld` |
@@ -77,7 +77,7 @@ status code・ヘッダ・中継の封筒の形は移行前と同じである。
 | 文書 | `README.md` / `docs/operator-quickstart.md` / `docs/adr/*.edn` |
 
 **appview の TypeScript / Svelte / JavaScript は 0 本、正本言語（`.cljs`/`.cljc`）
-が `src/` + `test/` に 4 本**（加えて `scripts/` に検査が 2 本）。移行前は
+が `src/` + `test/` に 16 本**（加えて `scripts/` に検査が 2 本）。移行前は
 **production source が 3 対 0**（`src/app.ts`・
 `svelte/src/routes/xrpc/[...path]/+server.ts`・`svelte/src/routes/+page.svelte`）、
 `appview/` 配下の `.ts`/`.svelte`/`.js` を全部数えても **5 対 0** だった

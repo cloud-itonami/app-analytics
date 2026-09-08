@@ -18,7 +18,7 @@
             [analytics.retraction-observation :as ro]
             [analytics.attribution-observation :as ao]
             [shadow.resource :as rc]
-            [clojure.string :as str]))
+            [kotoba.lang.text :as str]))
 
 (def ^:private dds-css
   "DADS の CSS はビルド時に bundle へ焼く。外部リクエストゼロが design system
@@ -152,7 +152,7 @@
                      :app "analytics"
                      :runtime "cljs"
                      :actor route/actor-did
-                     :routes (mapv (fn [r] (str (str/upper-case (name (:route/method r)))
+                     :routes (mapv (fn [r] (str (str/upper (name (:route/method r)))
                                                 " " (:route/path r)))
                                    route/routes)}
                     200)
@@ -170,7 +170,7 @@
       :bad-request (json {:error reason} 400)
       :method-not-allowed (json {:error "Method Not Allowed"} 405 {"allow" allow})
       (json {:error "NotFound"
-             :routes (mapv (fn [r] (str (str/upper-case (name (:route/method r)))
+             :routes (mapv (fn [r] (str (str/upper (name (:route/method r)))
                                         " " (:route/path r)))
                            route/routes)}
             404))))

@@ -11,7 +11,7 @@
 ;; Exit:   0 全て期待どおり · 1 期待と違う · 2 判定できなかった（bundle が無い等）
 
 (require '["node:fs" :as fs] '["node:path" :as path] '["node:url" :as url]
-         '[clojure.string :as str])
+         '[kotoba.lang.text :as str])
 
 (def bundle
   "ESM の import は相対パスを package 名と読むので、必ず絶対パスに直してから

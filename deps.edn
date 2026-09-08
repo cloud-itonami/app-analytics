@@ -11,7 +11,12 @@
 ;; (the west checkout at orgs/kotoba-lang/jp-go-digital-design-system), so the
 ;; bundle and the test run cannot be looking at two different design systems.
 {:paths ["src"]
- :deps {io.github.kotoba-lang/jp-go-digital-design-system
+ :deps {
+        ;; kotoba.lang.text, not clojure.string. Pinned as an explicit floor:
+        ;; tools.deps takes the NEWEST sha it is shown, so without a floor here
+        ;; this repo silently rides whatever a sibling happens to name.
+        io.github.kotoba-lang/text {:git/sha "73bdb13ae7a3d004b44bca08be03a3191157a38f"}
+       io.github.kotoba-lang/jp-go-digital-design-system
         {:git/url "https://github.com/kotoba-lang/jp-go-digital-design-system"
          :git/sha "0a0218052b0d563057341a1c2ab310045052bd23"}}
  :aliases

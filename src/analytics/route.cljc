@@ -25,7 +25,7 @@
   「持ち越さなかったもの」）。`/health` だけは上流も binding も要らないので
   **移植ではなく追加**として足した —— それが唯一の意図的な振る舞いの変更で
   ある。"
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def actor-did
   "この appview の DID。kotodama.jsonld の `@id` と同じ値。"
@@ -94,7 +94,7 @@
   `:cors-preflight` / `:bad-request` / `:method-not-allowed` / `:not-found`
   のいずれか。"
   [method path]
-  (let [m (keyword (str/lower-case (or method "GET")))
+  (let [m (keyword (str/lower (or method "GET")))
         p (or path "")]
     (cond
       (or (= p "/xrpc") (str/starts-with? p "/xrpc/"))
@@ -156,7 +156,7 @@
 (defn forward-header?
   "このヘッダを上流の MCP router へ転送してよいか。"
   [k]
-  (not (contains? dropped-headers (str/lower-case (or k "")))))
+  (not (contains? dropped-headers (str/lower (or k "")))))
 
 (defn unwrap-mcp
   "MCP router の応答 → 呼び手に返す値。

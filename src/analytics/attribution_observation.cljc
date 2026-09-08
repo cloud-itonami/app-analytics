@@ -33,7 +33,7 @@
   people-level inference) are stamped into every record. Pure functions
   only: no network, no clock, no file I/O. Determinism is a test fixture
   (byte-identical pr-str across runs)."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 ;; ---------------------------------------------------------------------------
 ;; Source classes — first-party classes are auditable here; third-party
@@ -64,7 +64,7 @@
   failure is reported as a mismatch, never coerced into a match."
   [s]
   (when (seq s)
-    (some-> (re-find #"://([^/?#@]+)" s) second str/lower-case not-empty)))
+    (some-> (re-find #"://([^/?#@]+)" s) second str/lower not-empty)))
 
 (defn- authority-declared?
   "True when host equals a declared authority domain exactly, or is a

@@ -1,6 +1,6 @@
 (ns analytics.duplicate-observation-test
   (:require [clojure.test :refer [deftest is run-tests]]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [analytics.duplicate-observation :as dobs]))
 
 ;; ---------------------------------------------------------------------------

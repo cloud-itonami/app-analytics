@@ -1,6 +1,6 @@
 (ns analytics.route-test
   (:require [clojure.test :refer [deftest is testing]]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [analytics.route :as route]
             [analytics.view :as view]))
 

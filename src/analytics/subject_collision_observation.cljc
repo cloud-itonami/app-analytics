@@ -33,7 +33,8 @@
   Pure functions only: no network, no clock, no file I/O. Determinism is a
   test fixture (byte-identical pr-str across runs). Self-contained by
   design: no dependency on any other analytics namespace beyond the
-  influence-observation/v1 record shape it audits.")
+  influence-observation/v1 record shape it audits."
+  (:require [kotoba.lang.text]))
 
 ;; ---------------------------------------------------------------------------
 ;; Validation — only influence-observation/v1-shaped records are consumed
@@ -74,7 +75,7 @@
   key cannot smuggle a direction into the comparison."
   [s]
   (when (some? s)
-    (clojure.string/lower-case (clojure.string/trim s))))
+    (kotoba.lang.text/lower (kotoba.lang.text/trim s))))
 
 ;; ---------------------------------------------------------------------------
 ;; Per-key collision groups — verbatim subjects, additive counts

@@ -132,7 +132,7 @@
    (let [raw (when env (aget env env-var))
         parsed (when raw
                  (try (js->clj (js/JSON.parse raw) :keywordize-keys true)
-                      (catch :default ::unparseable)))
+                      (catch :default _ ::unparseable)))
         [tag payload] (configure-observation
                        (when-not (= ::unparseable parsed) parsed))]
     (case tag

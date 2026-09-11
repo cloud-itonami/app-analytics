@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; verify-docs-claims — README.md と docs/operator-quickstart.md が述べる数と
 ;; 存在・不在を tree から再計算し、食い違えば落とす。
 ;;
@@ -9,7 +9,7 @@
 ;; これないように書いてある —— TypeScript は「合計バイト数が減った」ではなく
 ;; **パスを名指しして不在**を検査する。
 ;;
-;; Usage:  nbb scripts/verify-docs-claims.cljs [<dir>]     (<dir> は先頭、既定 ".")
+;; Usage:  kbb --backend sci scripts/verify-docs-claims.cljk [<dir>]     (<dir> は先頭、既定 ".")
 ;; Exit:   0 全 claim が成立 · 1 claim が偽 · 2 答えられなかった
 
 (require '["node:fs" :as fs]

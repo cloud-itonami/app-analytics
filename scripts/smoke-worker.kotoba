@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; smoke-worker — 実際にビルドされた bundle を import して叩く。
 ;;
 ;; ここが「deploy される成果物」に触る唯一の検査である。テスト
@@ -7,7 +7,7 @@
 ;; :advanced-optimization 下での env キー、`shadow.resource/inline` で焼いた
 ;; CSS は、どれもビルドを通って初めて存在する。
 ;;
-;; Usage:  nbb scripts/smoke-worker.cljs [<dist/worker.js>]
+;; Usage:  kbb --backend sci scripts/smoke-worker.cljk [<dist/worker.js>]
 ;; Exit:   0 全て期待どおり · 1 期待と違う · 2 判定できなかった（bundle が無い等）
 
 (require '["node:fs" :as fs] '["node:path" :as path] '["node:url" :as url]

@@ -8,7 +8,7 @@
 ;; (appview/analytics-mcp-component/src/app.ts) was in no bundle.
 ;;
 ;; :warnings-as-errors is not decoration. shadow treats an undeclared or renamed
-;; var as a WARNING, so `shadow-cljs release worker` exited 0 while writing a
+;; var as a WARNING, so `amu compile --target wasm32-browser worker` exited 0 while writing a
 ;; bundle that throws `Cannot read properties of undefined` on the first request.
 ;; "The build succeeded" was therefore not a check at all -- it could not fail.
 ;; Measured in cloud-itonami/app-cowork on 2026-08-18, and demonstrated in THIS

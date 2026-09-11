@@ -136,7 +136,7 @@ main にも含めず、appview のどのファイルも require していない�
 - **ページ描画 → design-quality score 100.00 / 100、gate PASS（exit 0）**
 - **scripts/verify-docs-claims.cljs**: 18 claim すべて PASS、exit 0
 - **bundle をビルドし、実際に叩いた。** resource-guard 経由で 45 秒間隔 44 回の
-  順番待ちのあと `shadow-cljs release worker` が 55 files / 12 compiled /
+  順番待ちのあと `amu compile --target wasm32-browser worker` が 55 files / 12 compiled /
   0 warnings / 132.95s で通り、dist/worker.js（246,174 バイト）を出した。
   scripts/smoke-worker.cljs がそれを import して **27 項目**を確認し全 PASS。
   **これがこの repo で唯一 deploy される成果物に触る検査である。**

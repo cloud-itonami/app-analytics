@@ -122,7 +122,7 @@ cat > /tmp/run.cljs <<'EOF'
 (require '[cljs.test :refer [run-tests]] 'analytics.route-test)
 (run-tests 'analytics.route-test)
 EOF
-npx --yes nbb --classpath "$CP" /tmp/run.cljs
+npx --yes kbb --backend sci --classpath "$CP" /tmp/run.cljs
 ```
 
 実際の出力:
@@ -160,8 +160,8 @@ cat > /tmp/render.cljs <<'EOF'
                   :actor-did route/actor-did}))
   (println "rendered" (.-size (.statSync fs "/tmp/an-page.html")) "bytes"))
 EOF
-DDS="$K/jp-go-digital-design-system" npx --yes nbb --classpath "$CP" /tmp/render.cljs
-cd $K/design-quality && npx --yes nbb -m design-quality.cli score /tmp/an-page.html --min 95
+DDS="$K/jp-go-digital-design-system" npx --yes kbb --backend sci --classpath "$CP" /tmp/render.cljs
+cd $K/design-quality && npx --yes kbb --backend sci -m design-quality.cli score /tmp/an-page.html --min 95
 ```
 
 実際の出力:
@@ -189,7 +189,7 @@ safe-area / tap target / focus-visible / reduced-motion / 対比などの
 
 ```bash
 node ~/github/com-junkawasaki/scripts/resource-guard.mjs run build -- \
-  npx --yes shadow-cljs release worker
+  npx --yes amu compile --target wasm32-browser worker
 ls -la dist/worker.js
 ```
 
@@ -250,7 +250,7 @@ shadow-cljs - starting via "clojure"
 どれもビルドを通って初めて存在する。
 
 ```bash
-npx --yes nbb scripts/smoke-worker.cljs dist/worker.js
+npx --yes kbb --backend sci scripts/smoke-worker.cljk dist/worker.js
 ```
 
 実際の出力（27 項目すべて PASS、exit 0。抜粋）:
@@ -301,7 +301,7 @@ env の**値**が漏れていないことは印（`SENTINEL-4c7e1b`）で見て�
 ## §7.5 ✅ 散文の数を tree から再計算する
 
 ```bash
-npx --yes nbb scripts/verify-docs-claims.cljs .     # <dir> は先頭に置く
+npx --yes kbb --backend sci scripts/verify-docs-claims.cljk .     # <dir> は先頭に置く
 ```
 
 実際の出力（末尾）:

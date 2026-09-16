@@ -1,0 +1,207 @@
+(ns analytics.immutability-observation-test
+  (:require [clojure.test :refer [deftest is run-tests]]
+            [analytics.immutability-observation :as imo]))
+
+;; ---------------------------------------------------------------------------
+;; Fixture builders
+;; ---------------------------------------------------------------------------
+
+(defn- rec
+  ([] (rec {}))
+  ([{:keys [id hash at] :or {id "r-1" hash "h-1" at 1500}}]
+   {:record/id id :content-hash hash :observed-at at
+    :source-url "https://registry.example/records/r-1"
+    :source-class :citation-registry}))
+
+(defn- snap
+  ([] (snap {}))
+  ([{:keys [seq records] :or {seq 0 records [(rec)]}}]
+   {:snapshot/seq seq :snapshot/records (vec records)}))
+
+(defn- audit-of [snaps]
+  (second (imo/build-immutability-observation "mv-audit-1" snaps)))
+
+(defn- flags [audit] (:flags audit))
+
+;; ---------------------------------------------------------------------------
+;; Structural refusals
+;; ---------------------------------------------------------------------------
+
+(deftest build-refusals
+  ;; missing audit method-version
+  (is (= [:rejected :missing-method-version]
+         (imo/build-immutability-observation "" [(snap)])))
+  (is (= [:rejected :missing-method-version]
+         (imo/build-immutability-observation nil [(snap)])))
+  ;; snapshots not sequential
+  (is (= [:rejected :snapshots-not-sequential]
+         (imo/build-immutability-observation "mv" "history")))
+  (is (= [:rejected :snapshots-not-sequential]
+         (imo/build-immutability-observation "mv" {:snapshot/seq 0})))
+  ;; fewer than two well-formed snapshots refuses to conclude — it must
+  ;; never read as a clean history
+  (is (= [:rejected :insufficient-history]
+         (imo/build-immutability-observation "mv" [(snap)])))
+  (is (= [:rejected :insufficient-history]
+         (imo/build-immutability-observation "mv" [])))
+  (is (= [:rejected :insufficient-history]
+         (imo/build-immutability-observation "mv" [(snap) {:snapshot/seq 1}]))))
+
+;; ---------------------------------------------------------------------------
+;; Clean append-only history — observed, never certified
+;; ---------------------------------------------------------------------------
+
+(deftest append-only-history-observed
+  (let [s1 (snap {:seq 0 :records [(rec {:id "r-1" :hash "h-1" :at 1500})]})
+        s2 (snap {:seq 1 :records [(rec {:id "r-1" :hash "h-1" :at 1500})
+                                   (rec {:id "r-2" :hash "h-2" :at 1600})]})
+        audit (audit-of [s1 s2])]
+    (is (= :accepted (first (imo/build-immutability-observation "mv-audit-1" [s1 s2]))))
+    (is (= [0 1] (:snapshot-seqs audit)))
+    (is (= :append-only-observed (:integrity-support (flags audit))))
+    (is (zero? (:records-dropped (flags audit))))
+    (is (zero? (:records-mutated (flags audit))))
+    (is (zero? (:observed-at-regressions (flags audit))))
+    (is (true? (:missing-is-unmeasured (flags audit))))
+    (is (true? (:repair-forbidden (flags audit))))
+    (is (true? (:ranking-forbidden (flags audit))))
+    (is (= :partial (:coverage (flags audit))))
+    (is (nil? (:ranking audit)))
+    (is (empty? (:claims audit)))))
+
+;; ---------------------------------------------------------------------------
+;; Dropped record — flagged and kept, never repaired
+;; ---------------------------------------------------------------------------
+
+(deftest dropped-record-flagged-not-repaired
+  (let [s1 (snap {:seq 0 :records [(rec {:id "r-1" :at 1500})
+                                   (rec {:id "r-2" :hash "h-2" :at 1600})]})
+        s2 (snap {:seq 1 :records [(rec {:id "r-1" :at 1500})]})
+        audit (audit-of [s1 s2])]
+    (is (= ["r-2"] (:dropped (:findings audit))))
+    (is (= 1 (:records-dropped (flags audit))))
+    (is (= :integrity-findings-present (:integrity-support (flags audit))))))
+
+;; ---------------------------------------------------------------------------
+;; Mutated record — both hashes travel verbatim
+;; ---------------------------------------------------------------------------
+
+(deftest mutated-record-keeps-both-hashes
+  (let [s1 (snap {:seq 0 :records [(rec {:id "r-1" :hash "h-1" :at 1500})]})
+        s2 (snap {:seq 1 :records [(rec {:id "r-1" :hash "h-1-rewritten" :at 1500})]})
+        audit (audit-of [s1 s2])]
+    (is (= [{:record/id "r-1"
+             :hash-before "h-1"
+             :hash-after "h-1-rewritten"}]
+           (:mutated (:findings audit))))
+    (is (= :integrity-findings-present (:integrity-support (flags audit))))))
+
+;; ---------------------------------------------------------------------------
+;; Observed-at regression — compared, never generated
+;; ---------------------------------------------------------------------------
+
+(deftest observed-at-regression-flagged
+  (let [s1 (snap {:seq 0 :records [(rec {:id "r-1" :at 1700})]})
+        s2 (snap {:seq 1 :records [(rec {:id "r-1" :at 1600})]})
+        audit (audit-of [s1 s2])]
+    (is (= [{:snapshot-seq-before 0 :snapshot-seq-after 1
+             :observed-at-before 1700 :observed-at-after 1600}]
+           (:observed-at-regressed (:findings audit))))
+    (is (= :integrity-findings-present (:integrity-support (flags audit))))))
+
+;; ---------------------------------------------------------------------------
+;; Malformed records enumerated, never folded into the comparison
+;; ---------------------------------------------------------------------------
+
+(deftest malformed-records-enumerated
+  (let [s1 (snap {:seq 0 :records [(rec {:id "r-1" :at 1500})]})
+        s2 (snap {:seq 1 :records [(rec {:id "r-1" :at 1500})
+                                   {:record/id "r-9"}
+                                   (rec {:id "r-1" :hash "h-dup"})]})
+        audit (audit-of [s1 s2])]
+    ;; :record/id "r-1" twice in s2 and one record without content-hash
+    ;; r-9 (no content-hash) plus both r-1 copies (ambiguous id) are all
+    ;; enumerated and none enters the comparison
+    (is (= 3 (count (:malformed-records (:findings audit)))))
+    (is (= ["r-1"] (:duplicated-ids (:findings audit))))
+    (is (= 3 (:malformed-records (flags audit))))
+    (is (= 1 (:duplicated-ids (flags audit))))))
+
+;; ---------------------------------------------------------------------------
+;; Multi-refresh walk — findings stay additive across consecutive pairs
+;; ---------------------------------------------------------------------------
+
+(deftest multi-refresh-additive
+  (let [s1 (snap {:seq 0 :records [(rec {:id "r-1" :at 1500})
+                                   (rec {:id "r-2" :hash "h-2" :at 1600})]})
+        s2 (snap {:seq 1 :records [(rec {:id "r-1" :at 1500})]})
+        s3 (snap {:seq 2 :records [(rec {:id "r-1" :hash "h-1x" :at 1500})]})
+        audit (audit-of [s1 s2 s3])]
+    (is (= [0 1 2] (:snapshot-seqs audit)))
+    (is (= ["r-2"] (:dropped (:findings audit))))
+    (is (= [{:record/id "r-1" :hash-before "h-1" :hash-after "h-1x"}]
+           (:mutated (:findings audit))))
+    (is (= 1 (:records-dropped (flags audit))))
+    (is (= 1 (:records-mutated (flags audit))))
+    (is (= :integrity-findings-present (:integrity-support (flags audit))))))
+
+;; ---------------------------------------------------------------------------
+;; Append-only refresh history of the audits themselves
+;; ---------------------------------------------------------------------------
+
+(deftest refresh-history-append-only
+  (let [a1 (audit-of [(snap {:seq 0}) (snap {:seq 1})])
+        hist (imo/refresh [a1] :audit-2)]
+    (is (= [a1 :audit-2] (imo/history-records hist)))
+    (is (= [a1] (imo/history-records [a1])))))
+
+;; ---------------------------------------------------------------------------
+;; Hyakka proposal / readback
+;; ---------------------------------------------------------------------------
+
+(deftest hyakka-proposal-and-readback
+  ;; a clean audit proposes nothing — absence of findings is not data
+  (let [clean (audit-of [(snap {:seq 0}) (snap {:seq 1})])]
+    (is (nil? (imo/hyakka-proposal clean))))
+  ;; a mutation audit proposes, and the proposal round-trips
+  (let [s1 (snap {:seq 0 :records [(rec {:id "r-1" :hash "h-1" :at 1500})
+                                   (rec {:id "r-2" :hash "h-2" :at 1600})]})
+        s2 (snap {:seq 1 :records [(rec {:id "r-1" :hash "h-1x" :at 1500})]})
+        audit (audit-of [s1 s2])
+        proposal (imo/hyakka-proposal audit)]
+    (is (some? proposal))
+    (is (= "immutability-observation/v1" (:proposal/contract proposal)))
+    (is (= 1 (:records-mutated (:proposal/flags proposal))))
+    (is (= 1 (:records-dropped (:proposal/flags proposal))))
+    (is (= :integrity-findings-present (:integrity-support (:proposal/flags proposal))))
+    (is (true? (:proposal/suggestion-only proposal)))
+    (is (= :partial (:proposal/coverage proposal)))
+    (is (nil? (:proposal/ranking proposal)))
+    ;; deterministic dedupe-key: byte-identical across two derivations
+    (is (= (imo/dedupe-key audit) (imo/dedupe-key (audit-of [s1 s2]))))
+    ;; faithful readback accepted
+    (is (true? (imo/hyakka-readback-accept? proposal proposal)))
+    ;; tampering refused — structural refusals stripped
+    (is (false? (imo/hyakka-readback-accept?
+                 proposal (assoc proposal :proposal/repair-forbidden false))))
+    (is (false? (imo/hyakka-readback-accept?
+                 proposal (assoc proposal :proposal/contract "immutability-observation/v2"))))
+    (is (false? (imo/hyakka-readback-accept?
+                 proposal (assoc-in proposal [:proposal/findings :mutated] []))))
+    (is (false? (imo/hyakka-readback-accept?
+                 proposal (assoc proposal :proposal/ranking {:top 1}))))
+    (is (false? (imo/hyakka-readback-accept?
+                 proposal (assoc proposal :proposal/dedupe-key nil))))
+    ;; clean coverage claim refused
+    (is (false? (imo/hyakka-readback-accept?
+                 proposal (assoc proposal :proposal/coverage :full))))))
+
+(deftest determinism-byte-identical
+  (let [s1 (snap {:seq 0 :records [(rec {:id "r-1" :at 1500})
+                                   (rec {:id "r-2" :hash "h-2" :at 1600})]})
+        s2 (snap {:seq 1 :records [(rec {:id "r-1" :at 1500})]})]
+    (is (= (pr-str (imo/build-immutability-observation "mv-audit-1" [s1 s2]))
+           (pr-str (imo/build-immutability-observation "mv-audit-1" [s1 s2]))))))
+
+(defn run-all []
+  (run-tests 'analytics.immutability-observation-test))

@@ -1,0 +1,316 @@
+(ns analytics.immutability-observation
+  "immutability-observation/v1 — bounded, provenance-preserving audit of the
+  APPEND-ONLY INVARIANT over one refresh history, for the cloud-itonami
+  analytics actor.
+
+  Prior contracts observe signals (influence-observation/v1), audit cadence
+  and staleness over the history (window-refresh-observation/v1), detect
+  cross-record disagreement (observation-conflict/v1) and value-identical
+  repeats (duplicate-observation/v1). None of them ask whether the history
+  itself is still append-only. `research-scope.edn` names `:impact-observation`
+  and `:correction` as first-class entities, and the repo convention is that
+  refreshes are APPEND-ONLY (`refresh` in every contract appends, never
+  rewrites). A history that silently lost or rewrote an earlier record would
+  turn every later contract's read into evidence authored by mutation. This
+  contract closes that hole. It answers exactly one auditable question:
+  **between consecutive snapshots of one refresh history, did every earlier
+  record survive unchanged — and if not, which records were dropped or
+  mutated?**
+
+    * history is supplied as a sequence of SNAPSHOTS, each snapshot being the
+      full record list as it stood at one refresh. Every record carries
+      :record/id, :content-hash and :observed-at. The module has no clock and
+      no store — it only compares what the caller handed it;
+    * a record present in an earlier snapshot and absent from a later one is
+      flagged :record-dropped — flagged and KEPT (the earlier snapshot
+      remains the only evidence it ever existed). No repair, no re-insertion,
+      no tombstone fabrication (:repair-forbidden);
+    * a record whose :content-hash changed under the same :record/id is
+      flagged :record-mutated — both hashes travel with the finding, verbatim;
+    * :observed-at monotonicity across snapshots is checked: a later snapshot
+      whose newest :observed-at regresses behind an earlier one is flagged
+      :observed-at-regressed. Timestamps are compared, never generated;
+    * fewer than two snapshots is NOT a pass — it is :insufficient-history,
+      an explicit refusal to conclude (\"no mutation observed\" must never
+      mean \"only one snapshot was supplied\");
+    * malformed snapshots/records are enumerated (:malformed-snapshot /
+      :malformed-record) and never folded into the comparison — an
+      unidentifiable record cannot carry the invariant either way;
+    * integrity support is a record of what the comparison SAW, never a
+      certification: :append-only-observed / :mutation-detected /
+      :insufficient-history / :not-assessed. None of these asserts the
+      history WILL stay append-only;
+    * coverage is always :partial — the audit says nothing about snapshots or
+      records outside the supplied history.
+
+  Self-contained by design: no dependency on any other analytics namespace.
+  Pure functions only: no network, no clock, no file I/O. Determinism is a
+  test fixture (byte-identical pr-str across runs).")
+
+;; ---------------------------------------------------------------------------
+;; Snapshot / record validation
+;; ---------------------------------------------------------------------------
+
+(defn- conformant-record? [r]
+  (and (map? r)
+       (seq (:record/id r))
+       (seq (:content-hash r))
+       (integer? (:observed-at r))
+       (not (neg? (long (:observed-at r))))))
+
+(defn- conformant-snapshot? [s]
+  (and (map? s)
+       (vector? (:snapshot/records s))
+       (integer? (:snapshot/seq s))
+       (not (neg? (long (:snapshot/seq s))))))
+
+;; ---------------------------------------------------------------------------
+;; Enumeration — sorted so batch order never leaks into the record
+;; ---------------------------------------------------------------------------
+
+(defn- index-records
+  "Map :record/id -> the well-formed record, for one snapshot. Malformed
+  records, and every record carrying a DUPLICATED :record/id (whose snapshot
+  presence would be ambiguous), are returned separately and never enter the
+  comparison."
+  [records]
+  (let [{ok true, bad false} (group-by #(boolean (conformant-record? %)) records)
+        counts (frequencies (keep :record/id ok))
+        ambiguous? (fn [r] (> (long (get counts (:record/id r) 0)) 1))
+        comparable (remove ambiguous? ok)
+        ambig (filter ambiguous? ok)
+        by-id (into (sorted-map)
+                    (map (fn [r] [(:record/id r) (select-keys r [:record/id :content-hash :observed-at])])
+                         comparable))]
+    {:by-id by-id
+     :malformed (mapv #(select-keys % [:record/id :content-hash :observed-at])
+                      (concat bad ambig))
+     :duplicated-ids (vec (sort (keep (fn [id] (when (> (long (get counts id 0)) 1) id))
+                                      (sort (set (keys counts))))))}))
+
+(defn- diff-snapshots
+  "Between two indexed snapshots, derive the append-only violations. Dropped
+  = id present before, absent after. Mutated = id present in both,
+  content-hash differs (both hashes kept). Ids that were ambiguous in EITHER
+  snapshot are skipped — an ambiguous record cannot carry the invariant
+  either way."
+  [before after]
+  (let [b (:by-id before)
+        a (:by-id after)
+        skip (set (concat (:duplicated-ids before) (:duplicated-ids after)))
+        dropped (vec (sort (keep (fn [id] (when-not (contains? a id) id)) (keys b))))
+        mutated (vec (sort-by :record/id
+                              (map (fn [id]
+                                     {:record/id id
+                                      :hash-before (:content-hash (get b id))
+                                      :hash-after (:content-hash (get a id))})
+                                   (filter (fn [id] (and (contains? a id)
+                                                         (not= (:content-hash (get b id))
+                                                               (:content-hash (get a id)))))
+                                           (keys b)))))]
+    {:dropped dropped :mutated mutated}))
+
+;; ---------------------------------------------------------------------------
+;; Derivation
+;; ---------------------------------------------------------------------------
+
+(defn derive-immutability
+  "Walk consecutive snapshot pairs and enumerate every append-only
+  violation. Returns {:dropped [...] :mutated [...] :malformed-records [...]
+  :observed-at-regressed [...] :duplicated-ids [...]}. Findings are
+  additive — never netted, never repaired."
+  [snapshots]
+  (let [{ok true, bad false} (group-by #(boolean (conformant-snapshot? %)) snapshots)
+        indexed (mapv (fn [s] (index-records (:snapshot/records s))) ok)
+        pairs (map vector indexed (rest indexed))
+        diffs (map (fn [[b a]] (diff-snapshots b a)) pairs)
+        dropped (mapcat :dropped diffs)
+        mutated (mapcat :mutated diffs)
+        newest-at (mapv (fn [s] (let [ix (index-records (:snapshot/records s))]
+                                  (if (empty? (:by-id ix))
+                                    nil
+                                    (apply max (map :observed-at (vals (:by-id ix)))))))
+                        ok)
+        regressed (keep (fn [[s-before s-after max-before max-after]]
+                          (when (and (some? max-before) (some? max-after)
+                                     (< max-after max-before))
+                            {:snapshot-seq-before (:snapshot/seq s-before)
+                             :snapshot-seq-after (:snapshot/seq s-after)
+                             :observed-at-before max-before
+                             :observed-at-after max-after}))
+                        (map vector (butlast ok) (rest ok) newest-at (rest newest-at)))
+        dup-ids (distinct (mapcat :duplicated-ids indexed))
+        malformed (concat
+                   (mapcat (fn [s] (map #(assoc % :snapshot-seq (:snapshot/seq s))
+                                        (:malformed (index-records (:snapshot/records s)))))
+                           ok)
+                   (map (fn [s] {:snapshot-seq (:snapshot/seq s)}) bad))]
+    {:dropped (vec (sort dropped))
+     :mutated (vec (sort-by :record/id mutated))
+     :malformed-records (vec (sort-by (juxt :snapshot-seq :record/id)
+                                      (map #(select-keys % [:snapshot-seq :record/id :content-hash :observed-at])
+                                           malformed)))
+     :observed-at-regressed (mapv #(select-keys % [:snapshot-seq-before :snapshot-seq-after
+                                                   :observed-at-before :observed-at-after])
+                                  regressed)
+     :duplicated-ids (vec (sort dup-ids))}))
+
+(defn derive-flags
+  "Uncertainty/coverage flags over the immutability audit. The support state
+  records what the comparison saw — never a certification that the history
+  will stay append-only."
+  [derived n-snapshots]
+  (let [clean? (and (empty? (:dropped derived))
+                    (empty? (:mutated derived))
+                    (empty? (:observed-at-regressed derived))
+                    (empty? (:duplicated-ids derived))
+                    (empty? (:malformed-records derived)))
+        support (cond
+                  (< (long n-snapshots) 2) :insufficient-history
+                  (not clean?) :integrity-findings-present
+                  :else :append-only-observed)]
+    {:snapshots-audited (long n-snapshots)
+     :records-dropped (count (:dropped derived))
+     :records-mutated (count (:mutated derived))
+     :malformed-records (count (:malformed-records derived))
+     :observed-at-regressions (count (:observed-at-regressed derived))
+     :duplicated-ids (count (:duplicated-ids derived))
+     :integrity-support support
+     :missing-is-unmeasured true
+     :repair-forbidden true
+     :ranking-forbidden true
+     :causal-claims-forbidden true
+     :suggestion-only true
+     :coverage :partial}))
+
+;; ---------------------------------------------------------------------------
+;; Observation builder
+;; ---------------------------------------------------------------------------
+
+(defn build-immutability-observation
+  "Build one immutability-observation/v1 record over `snapshots` — a sequence
+  of {:snapshot/seq n :snapshot/records [record ...]} in the order the
+  refreshes were taken. `method-version` is the AUDIT's own caller-supplied
+  version, stamped verbatim. Structural refusals are hardwired: fewer than
+  two well-formed snapshots refuses to conclude rather than reading as a
+  clean history."
+  [method-version snapshots]
+  (cond
+    (not (seq method-version))
+    [:rejected :missing-method-version]
+
+    (not (sequential? snapshots))
+    [:rejected :snapshots-not-sequential]
+
+    (< (long (count (filter conformant-snapshot? snapshots))) 2)
+    [:rejected :insufficient-history]
+
+    :else
+    (let [well-formed (vec (filter conformant-snapshot? snapshots))
+          derived (derive-immutability snapshots)
+          flags (derive-flags derived (count well-formed))]
+      [:accepted
+       {:contract "immutability-observation"
+        :version "v1"
+        :method-version method-version
+        :snapshot-seqs (mapv :snapshot/seq well-formed)
+        :findings {:dropped (:dropped derived)
+                   :mutated (:mutated derived)
+                   :malformed-records (:malformed-records derived)
+                   :observed-at-regressed (:observed-at-regressed derived)
+                   :duplicated-ids (:duplicated-ids derived)}
+        :flags flags
+        :ranking nil
+        :ranking-forbidden true
+        :causal-claims-forbidden true
+        :repair-forbidden true
+        :claims []}])))
+
+;; ---------------------------------------------------------------------------
+;; Append-only refresh history
+;; ---------------------------------------------------------------------------
+
+(defn refresh
+  "Append a new immutability audit onto the history of audit records. Prior
+  records are immutable; nothing is rewritten."
+  [history audit]
+  (conj (vec history) audit))
+
+(defn history-records
+  "The append-only list of prior audit records."
+  [history]
+  (vec history))
+
+;; ---------------------------------------------------------------------------
+;; Hyakka proposal / readback
+;; ---------------------------------------------------------------------------
+
+(defn dedupe-key
+  "Deterministic identity for one immutability audit. Maps are sorted before
+  serialization so iteration order never leaks into the key. Pure string —
+  no crypto, no clock."
+  [audit]
+  (when (map? audit)
+    (str "immutability-observation/v1:"
+         (pr-str {:method-version (:method-version audit)
+                  :snapshot-seqs (:snapshot-seqs audit)
+                  :dropped (:dropped (:findings audit))
+                  :mutated (:mutated (:findings audit))
+                  :malformed-records (count (:malformed-records (:findings audit)))
+                  :observed-at-regressed (:observed-at-regressed (:findings audit))
+                  :flags (select-keys (:flags audit)
+                                      [:snapshots-audited
+                                       :records-dropped
+                                       :records-mutated
+                                       :integrity-support])}))))
+
+(defn hyakka-proposal
+  "Proposal payload for the Hyakka wiki, or nil for an audit with no
+  observable content — a clean audit over a history that saw no mutation
+  dresses absence up as data, and absence of findings is only meaningful
+  once at least two snapshots actually carried well-formed records."
+  [audit]
+  (when (and (map? audit)
+             (or (pos? (long (or (:records-dropped (:flags audit)) 0)))
+                 (pos? (long (or (:records-mutated (:flags audit)) 0)))
+                 (pos? (long (or (:malformed-records (:flags audit)) 0)))
+                 (pos? (long (or (:observed-at-regressions (:flags audit)) 0)))
+                 (pos? (long (or (:duplicated-ids (:flags audit)) 0)))))
+    {:proposal/type :immutability-observation
+     :proposal/dedupe-key (dedupe-key audit)
+     :proposal/contract "immutability-observation/v1"
+     :proposal/method-version (:method-version audit)
+     :proposal/snapshot-seqs (:snapshot-seqs audit)
+     :proposal/findings (:findings audit)
+     :proposal/flags (:flags audit)
+     :proposal/coverage :partial
+     :proposal/suggestion-only true
+     :proposal/ranking nil
+     :proposal/ranking-forbidden true
+     :proposal/causal-claims-forbidden true
+     :proposal/repair-forbidden true
+     :proposal/claims []
+     :proposal/note "append-only-integrity-audit-findings-preserved-never-repaired"}))
+
+(defn hyakka-readback-accept?
+  "Accept a readback only if it is still the record this actor proposed: same
+  contract, same dedupe-key, same method-version, same findings and flags —
+  and the structural refusals (no ranking, no causal claims, no repair,
+  suggestion-only) not stripped. Anything else is tampering; refuse."
+  [proposal readback]
+  (and (map? readback)
+       (= "immutability-observation/v1" (:proposal/contract readback))
+       (some? (:proposal/dedupe-key readback))
+       (= (:proposal/dedupe-key proposal) (:proposal/dedupe-key readback))
+       (= (:proposal/method-version proposal) (:proposal/method-version readback))
+       (= (:proposal/snapshot-seqs proposal) (:proposal/snapshot-seqs readback))
+       (= (:proposal/findings proposal) (:proposal/findings readback))
+       (= (:proposal/flags proposal) (:proposal/flags readback))
+       (some? (:proposal/flags readback))
+       (= :partial (:proposal/coverage readback))
+       (true? (:proposal/suggestion-only readback))
+       (true? (:proposal/ranking-forbidden readback))
+       (true? (:proposal/causal-claims-forbidden readback))
+       (true? (:proposal/repair-forbidden readback))
+       (nil? (:proposal/ranking readback))
+       (empty? (:proposal/claims readback))))

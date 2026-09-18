@@ -1,0 +1,196 @@
+(ns analytics.window-containment-observation-test
+  (:require [clojure.test :refer [deftest is run-tests]]
+            [analytics.window-containment-observation :as wco]))
+
+;; ---------------------------------------------------------------------------
+;; Fixture builders
+;; ---------------------------------------------------------------------------
+
+(defn- sig
+  ([] (sig {}))
+  ([{:keys [id at] :or {id "s-1" at 1500}}]
+   {:signal/id id :observed-at at
+    :source-url "https://registry.example/signals/s-1"
+    :source-class :citation-registry
+    :dimension :scholarly-citation}))
+
+(def ^:private window {:from 1000 :to 2000})
+
+(defn- obs-of [w sigs]
+  (second (wco/build-window-containment-observation "mv-wc-1" w (vec sigs))))
+
+(defn- flags [audit] (:flags audit))
+
+;; ---------------------------------------------------------------------------
+;; Structural refusals — each carries its named reason literal
+;; ---------------------------------------------------------------------------
+
+(deftest build-refusals
+  ;; missing audit method-version
+  (is (= [:rejected :missing-method-version]
+         (wco/build-window-containment-observation "" window [(sig)])))
+  (is (= [:rejected :missing-method-version]
+         (wco/build-window-containment-observation nil window [(sig)])))
+  ;; malformed window shapes
+  (is (= [:rejected :malformed-window]
+         (wco/build-window-containment-observation "mv" nil [(sig)])))
+  (is (= [:rejected :malformed-window]
+         (wco/build-window-containment-observation "mv" {} [(sig)])))
+  (is (= [:rejected :malformed-window]
+         (wco/build-window-containment-observation "mv" {:from "a" :to "b"} [(sig)])))
+  ;; an inverted window REFUSES TO CONCLUDE — it must never read as clean
+  (is (= [:rejected :window-inverted]
+         (wco/build-window-containment-observation "mv" {:from 2000 :to 1000} [(sig)])))
+  ;; signals not sequential
+  (is (= [:rejected :signals-not-sequential]
+         (wco/build-window-containment-observation "mv" window "batch")))
+  (is (= [:rejected :signals-not-sequential]
+         (wco/build-window-containment-observation "mv" window {:signal/id "s-1"})))
+  ;; empty / all-malformed batch refuses to conclude — it must never read as
+  ;; "all signals inside the window"
+  (is (= [:rejected :no-well-formed-signals]
+         (wco/build-window-containment-observation "mv" window [])))
+  (is (= [:rejected :no-well-formed-signals]
+         (wco/build-window-containment-observation "mv" window [{:signal/id "s-1"}])))
+  (is (= [:rejected :no-well-formed-signals]
+         (wco/build-window-containment-observation "mv" window [(sig {:at "1500"})]))))
+
+;; ---------------------------------------------------------------------------
+;; Clean containment — observed, never certified
+;; ---------------------------------------------------------------------------
+
+(deftest all-contained-observed
+  (let [audit (obs-of window [(sig {:id "s-1" :at 1000})
+                              (sig {:id "s-2" :at 1500})
+                              (sig {:id "s-3" :at 2000})])]
+    (is (= :accepted (first (wco/build-window-containment-observation
+                             "mv-wc-1" window
+                             [(sig {:id "s-1" :at 1000})
+                              (sig {:id "s-2" :at 1500})
+                              (sig {:id "s-3" :at 2000})]))))
+    (is (= {:from 1000 :to 2000} (:window audit)))
+    ;; boundary is INCLUSIVE at both ends: from and to themselves are inside
+    (is (= ["s-1" "s-2" "s-3"] (mapv :signal/id (:inside (:findings audit)))))
+    (is (empty? (:before (:findings audit))))
+    (is (empty? (:after (:findings audit))))
+    (is (= :within-window-observed (:containment-support (flags audit))))
+    ;; observed is not certified
+    (is (= :partial (:coverage (flags audit))))
+    (is (true? (:missing-is-unmeasured (flags audit))))
+    (is (true? (:repair-forbidden (flags audit))))
+    (is (true? (:ranking-forbidden (flags audit))))
+    (is (true? (:causal-claims-forbidden (flags audit))))
+    (is (true? (:suggestion-only (flags audit))))
+    (is (nil? (:ranking audit)))
+    (is (empty? (:claims audit)))))
+
+;; ---------------------------------------------------------------------------
+;; Out-of-window findings — kept verbatim, never repaired
+;; ---------------------------------------------------------------------------
+
+(deftest out-of-window-findings-preserved
+  (let [audit (obs-of window [(sig {:id "in-1" :at 1500})
+                              (sig {:id "before-1" :at 999})
+                              (sig {:id "after-1" :at 2001})])
+        f (:findings audit)
+        fl (flags audit)]
+    (is (= ["in-1"] (mapv :signal/id (:inside f))))
+    (is (= [{:signal/id "before-1" :observed-at 999}] (:before f)))
+    (is (= [{:signal/id "after-1" :observed-at 2001}] (:after f)))
+    ;; findings travel with the exact timestamps, verbatim
+    (is (= 999 (:observed-at (first (:before f)))))
+    (is (= 2001 (:observed-at (first (:after f)))))
+    (is (= :containment-findings-present (:containment-support fl)))
+    (is (= 3 (:signals-supplied fl)))
+    (is (= 1 (:signals-contained fl)))
+    (is (= 1 (:signals-before-window fl)))
+    (is (= 1 (:signals-after-window fl)))))
+
+;; ---------------------------------------------------------------------------
+;; Malformed and duplicated signals — enumerated, never classified
+;; ---------------------------------------------------------------------------
+
+(deftest malformed-and-duplicated-enumerated
+  (let [audit (obs-of window [(sig {:id "ok-1" :at 1500})
+                              {:signal/id "bad-1" :source-url "https://registry.example/signals/bad-1"}
+                              {:signal/id "ok-2" :observed-at -5}
+                              (sig {:id "dup-1" :at 1200})
+                              (sig {:id "dup-1" :at 1800})])
+        f (:findings audit)
+        fl (flags audit)]
+    ;; duplicated ids excluded from containment entirely
+    (is (= ["ok-1"] (mapv :signal/id (:inside f))))
+    (is (= ["dup-1"] (:duplicated-ids f)))
+    ;; malformed enumerated with whatever identity they carried
+    (is (= #{"bad-1" "ok-2"} (set (mapv :signal/id (:malformed-signals f)))))
+    (is (= 1 (:signals-contained fl)))
+    (is (= 2 (:malformed-signals fl)))
+    (is (= 1 (:duplicated-ids fl)))
+    (is (= :containment-findings-present (:containment-support fl)))))
+
+;; ---------------------------------------------------------------------------
+;; Batch-order independence — sorted derivation is deterministic
+;; ---------------------------------------------------------------------------
+
+(deftest deterministic-across-batch-order
+  (let [a (obs-of window [(sig {:id "b-1" :at 999}) (sig {:id "a-1" :at 999})])
+        b (obs-of window [(sig {:id "a-1" :at 999}) (sig {:id "b-1" :at 999})])]
+    (is (= (pr-str a) (pr-str b)))
+    ;; dedupe-key is a pure string, stable across runs
+    (is (string? (wco/dedupe-key a)))
+    (is (= (wco/dedupe-key a) (wco/dedupe-key b)))))
+
+;; ---------------------------------------------------------------------------
+;; Refresh history — append-only
+;; ---------------------------------------------------------------------------
+
+(deftest refresh-history-append-only
+  (let [audit (obs-of window [(sig)])
+        h0 (wco/refresh [] audit)
+        h1 (wco/refresh h0 audit)]
+    (is (= [audit] h0))
+    (is (= [audit audit] h1))
+    (is (= 1 (count (wco/history-records h0))))
+    (is (= 2 (count (wco/history-records h1))))
+    ;; appending never mutated the earlier record
+    (is (= audit (first h1)))))
+
+;; ---------------------------------------------------------------------------
+;; Hyakka proposal / readback
+;; ---------------------------------------------------------------------------
+
+(deftest hyakka-proposal-gating
+  ;; clean containment proposes nothing — absence of findings is not data
+  (is (nil? (wco/hyakka-proposal (obs-of window [(sig {:at 1500})]))))
+  ;; a before-window finding proposes, and the payload carries the refusals
+  (let [audit (obs-of window [(sig {:id "early" :at 500})])
+        p (wco/hyakka-proposal audit)]
+    (is (map? p))
+    (is (= "window-containment-observation/v1" (:proposal/contract p)))
+    (is (= (:window audit) (:proposal/window p)))
+    (is (= :partial (:proposal/coverage p)))
+    (is (true? (:proposal/suggestion-only p)))
+    (is (true? (:proposal/ranking-forbidden p)))
+    (is (true? (:proposal/causal-claims-forbidden p)))
+    (is (true? (:proposal/repair-forbidden p)))
+    (is (nil? (:proposal/ranking p)))
+    (is (empty? (:proposal/claims p)))
+    ;; readback of the exact proposal is accepted
+    (is (true? (wco/hyakka-readback-accept? p p)))
+    ;; a stripped readback (ranking-forbidden removed) is tampering — refuse
+    (is (false? (wco/hyakka-readback-accept? p (dissoc p :proposal/ranking-forbidden))))
+    ;; a re-valued finding is tampering — refuse
+    (is (false? (wco/hyakka-readback-accept?
+                 p (assoc-in p [:proposal/findings :before] []))))
+    ;; a flipped window in the readback is tampering — refuse
+    (is (false? (wco/hyakka-readback-accept?
+                 p (assoc p :proposal/window {:from 1 :to 2}))))
+    ;; a fabricated claim in the readback is tampering — refuse
+    (is (false? (wco/hyakka-readback-accept?
+                 p (assoc p :proposal/claims ["causal"]))))))
+
+;; ---------------------------------------------------------------------------
+;; Run when executed directly
+;; ---------------------------------------------------------------------------
+
+(defn -main [] (run-tests 'analytics.window-containment-observation-test))

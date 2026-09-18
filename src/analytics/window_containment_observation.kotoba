@@ -1,0 +1,285 @@
+(ns analytics.window-containment-observation
+  "window-containment-observation/v1 — bounded, provenance-preserving audit of
+  whether the signals feeding one measurement actually fall INSIDE the
+  measurement window they were reduced under, for the cloud-itonami analytics
+  actor.
+
+  Prior contracts audit cadence and staleness over the refresh history
+  (window-refresh-observation/v1), comparability across method versions
+  (method-drift-observation/v1) and the integrity of the history itself
+  (immutability-observation/v1). None of them ask the per-measurement
+  question: influence-observation/v1 reduces admitted signals to additive
+  tallies \"inside an explicit measurement window\", but nothing checks that
+  the signals it was HANDED actually sit inside that window. A signal stamped
+  outside [from, to] that silently entered a window-scoped tally would make
+  the tally evidence of a window it did not measure. This contract closes
+  that hole. It answers exactly one auditable question: **for one declared
+  window and one supplied batch of signals, which signals fall inside, which
+  fall before it, which fall after it — and which are too malformed to carry
+  the claim either way?**
+
+    * the window is caller-supplied ({:from s :to e}, integer epoch seconds).
+      An inverted window (:from > :to) is a structural refusal (:rejected
+      :window-inverted) — a window that cannot be measured must never read as
+      a clean one;
+    * containment is INCLUSIVE at both ends: :from <= :observed-at <= :to.
+      A signal exactly at the boundary is inside (the boundary is asserted by
+      a fixture, never left to inference);
+    * a signal before the window is flagged :signal-before-window and KEPT
+      verbatim — never dropped, never clamped into the window, never folded
+      into a corrected tally (:repair-forbidden). Finding out that a signal
+      was out of window does not authorize anyone to remove it; it authorizes
+      the question \"what did the window actually measure?\";
+    * malformed signals (no :signal/id, or :observed-at missing or not a
+      non-negative integer) are enumerated :malformed-signals and never
+      classified either way — an untimestampable signal cannot support or
+      violate containment;
+    * a signal whose :signal/id appears more than once is flagged
+      :duplicated-ids and excluded from the containment comparison — presence
+      would be ambiguous;
+    * zero well-formed signals is NOT a pass — the audit refuses to conclude
+      (:no-well-formed-signals). \"All in window\" must never mean \"nothing
+      was supplied\";
+    * containment support is a record of what the comparison SAW, never a
+      certification of the caller's window choice: :within-window-observed /
+      :containment-findings-present / :no-well-formed-signals /
+      :not-assessed;
+    * coverage is always :partial — the audit says nothing about signals
+      outside the supplied batch, and nothing about whether the window
+      boundaries themselves were the right ones.
+
+  Self-contained by design: no dependency on any other analytics namespace.
+  Pure functions only: no network, no clock, no file I/O. Determinism is a
+  test fixture (byte-identical pr-str across runs).")
+
+;; ---------------------------------------------------------------------------
+;; Signal validation
+;; ---------------------------------------------------------------------------
+
+(defn- conformant-signal? [s]
+  (and (map? s)
+       (seq (:signal/id s))
+       (integer? (:observed-at s))
+       (not (neg? (long (:observed-at s))))))
+
+(defn- conformant-window? [w]
+  (and (map? w)
+       (integer? (:from w))
+       (integer? (:to w))
+       (not (neg? (long (:from w))))
+       (not (neg? (long (:to w))))
+       (<= (long (:from w)) (long (:to w)))))
+
+;; ---------------------------------------------------------------------------
+;; Enumeration — sorted so batch order never leaks into the finding
+;; ---------------------------------------------------------------------------
+
+(defn- classify-signals
+  "Split one batch of signals against one window. Signals carrying a
+  DUPLICATED :signal/id (whose timestamp claim would be ambiguous) are
+  returned separately and never enter the comparison."
+  [window signals]
+  (let [{ok true, bad false} (group-by #(boolean (conformant-signal? %)) signals)
+        counts (frequencies (keep :signal/id ok))
+        ambiguous? (fn [s] (> (long (get counts (:signal/id s) 0)) 1))
+        comparable (remove ambiguous? ok)
+        ambig (filter ambiguous? ok)
+        {:keys [from to]} window
+        inside (keep (fn [s] (when (and (<= (long from) (long (:observed-at s)))
+                                        (<= (long (:observed-at s)) (long to)))
+                               s))
+                     comparable)
+        before (keep (fn [s] (when (< (long (:observed-at s)) (long from)) s))
+                     comparable)
+        after (keep (fn [s] (when (< (long to) (long (:observed-at s))) s))
+                     comparable)
+        projected (fn [s] {:signal/id (:signal/id s) :observed-at (:observed-at s)})]
+    {:inside (mapv projected inside)
+     :before (mapv projected before)
+     :after (mapv projected after)
+     :malformed (mapv projected bad)
+     :duplicated-ids (vec (sort (keep (fn [id] (when (> (long (get counts id 0)) 1) id))
+                                      (sort (set (keys counts))))))}))
+
+;; ---------------------------------------------------------------------------
+;; Derivation
+;; ---------------------------------------------------------------------------
+
+(defn derive-containment
+  "Classify every supplied signal against the window. Returns {:inside [...]
+   :before [...] :after [...] :malformed-signals [...] :duplicated-ids [...]}.
+   Findings are additive — never netted, never repaired, never relocated."
+  [window signals]
+  (let [c (classify-signals window signals)]
+    {:inside (vec (sort-by (juxt :observed-at :signal/id) (:inside c)))
+     :before (vec (sort-by (juxt :observed-at :signal/id) (:before c)))
+     :after (vec (sort-by (juxt :observed-at :signal/id) (:after c)))
+     :malformed-signals (vec (sort-by (juxt :observed-at :signal/id)
+                                      (map #(select-keys % [:signal/id :observed-at])
+                                           (:malformed c))))
+     :duplicated-ids (:duplicated-ids c)}))
+
+(defn derive-flags
+  "Uncertainty/coverage flags over the containment audit. The support state
+  records what the comparison saw — never a certification that the caller's
+  window was the right one."
+  [derived n-signals]
+  (let [findings? (or (pos? (count (:before derived)))
+                      (pos? (count (:after derived)))
+                      (pos? (count (:malformed-signals derived)))
+                      (pos? (count (:duplicated-ids derived))))
+        support (cond
+                  (zero? (long n-signals)) :no-well-formed-signals
+                  findings? :containment-findings-present
+                  :else :within-window-observed)]
+    {:signals-supplied (long n-signals)
+     :signals-contained (count (:inside derived))
+     :signals-before-window (count (:before derived))
+     :signals-after-window (count (:after derived))
+     :malformed-signals (count (:malformed-signals derived))
+     :duplicated-ids (count (:duplicated-ids derived))
+     :containment-support support
+     :missing-is-unmeasured true
+     :repair-forbidden true
+     :ranking-forbidden true
+     :causal-claims-forbidden true
+     :suggestion-only true
+     :coverage :partial}))
+
+;; ---------------------------------------------------------------------------
+;; Observation builder
+;; ---------------------------------------------------------------------------
+
+(defn build-window-containment-observation
+  "Build one window-containment-observation/v1 record over `signals` against
+  the caller-supplied `window` ({:from s :to e}). `method-version` is the
+  audit's own caller-supplied version, stamped verbatim. Structural refusals
+  are hardwired: an inverted window refuses to conclude rather than reading
+  as clean, and an empty batch refuses to conclude rather than reading as
+  all-contained."
+  [method-version window signals]
+  (cond
+    (not (seq method-version))
+    [:rejected :missing-method-version]
+
+    (not (conformant-window? window))
+    (if (and (map? window) (integer? (:from window)) (integer? (:to window))
+             (> (long (:from window)) (long (:to window))))
+      [:rejected :window-inverted]
+      [:rejected :malformed-window])
+
+    (not (sequential? signals))
+    [:rejected :signals-not-sequential]
+
+    (zero? (long (count (filter conformant-signal? signals))))
+    [:rejected :no-well-formed-signals]
+
+    :else
+    (let [well-formed (vec (filter conformant-signal? signals))
+          derived (derive-containment window signals)
+          flags (derive-flags derived (count well-formed))]
+      [:accepted
+       {:contract "window-containment-observation"
+        :version "v1"
+        :method-version method-version
+        :window {:from (:from window) :to (:to window)}
+        :findings {:inside (:inside derived)
+                   :before (:before derived)
+                   :after (:after derived)
+                   :malformed-signals (:malformed-signals derived)
+                   :duplicated-ids (:duplicated-ids derived)}
+        :flags flags
+        :ranking nil
+        :ranking-forbidden true
+        :causal-claims-forbidden true
+        :repair-forbidden true
+        :claims []}])))
+
+;; ---------------------------------------------------------------------------
+;; Append-only refresh history
+;; ---------------------------------------------------------------------------
+
+(defn refresh
+  "Append a new containment audit onto the history of audit records. Prior
+  records are immutable; nothing is rewritten."
+  [history audit]
+  (conj (vec history) audit))
+
+(defn history-records
+  "The append-only list of prior audit records."
+  [history]
+  (vec history))
+
+;; ---------------------------------------------------------------------------
+;; Hyakka proposal / readback
+;; ---------------------------------------------------------------------------
+
+(defn dedupe-key
+  "Deterministic identity for one containment audit. Maps are sorted before
+  serialization so iteration order never leaks into the key. Pure string —
+  no crypto, no clock."
+  [audit]
+  (when (map? audit)
+    (str "window-containment-observation/v1:"
+         (pr-str {:method-version (:method-version audit)
+                  :window (:window audit)
+                  :before (:before (:findings audit))
+                  :after (:after (:findings audit))
+                  :malformed-signals (count (:malformed-signals (:findings audit)))
+                  :duplicated-ids (:duplicated-ids (:findings audit))
+                  :flags (select-keys (:flags audit)
+                                      [:signals-supplied
+                                       :signals-contained
+                                       :signals-before-window
+                                       :signals-after-window
+                                       :containment-support])}))))
+
+(defn hyakka-proposal
+  "Proposal payload for the Hyakka wiki, or nil for an audit with no
+  observable content — a clean audit over a batch that sat entirely in the
+  window dresses absence up as data, and \"all inside\" is only meaningful
+  once at least one well-formed signal actually was compared."
+  [audit]
+  (when (and (map? audit)
+             (or (pos? (long (or (:signals-before-window (:flags audit)) 0)))
+                 (pos? (long (or (:signals-after-window (:flags audit)) 0)))
+                 (pos? (long (or (:malformed-signals (:flags audit)) 0)))
+                 (pos? (long (or (:duplicated-ids (:flags audit)) 0)))))
+    {:proposal/type :window-containment-observation
+     :proposal/dedupe-key (dedupe-key audit)
+     :proposal/contract "window-containment-observation/v1"
+     :proposal/method-version (:method-version audit)
+     :proposal/window (:window audit)
+     :proposal/findings (:findings audit)
+     :proposal/flags (:flags audit)
+     :proposal/coverage :partial
+     :proposal/suggestion-only true
+     :proposal/ranking nil
+     :proposal/ranking-forbidden true
+     :proposal/causal-claims-forbidden true
+     :proposal/repair-forbidden true
+     :proposal/claims []
+     :proposal/note "window-containment-audit-findings-preserved-never-repaired"}))
+
+(defn hyakka-readback-accept?
+  "Accept a readback only if it is still the record this actor proposed: same
+  contract, same dedupe-key, same method-version, same window, same findings
+  and flags — and the structural refusals (no ranking, no causal claims, no
+  repair, suggestion-only) not stripped. Anything else is tampering; refuse."
+  [proposal readback]
+  (and (map? readback)
+       (= "window-containment-observation/v1" (:proposal/contract readback))
+       (some? (:proposal/dedupe-key readback))
+       (= (:proposal/dedupe-key proposal) (:proposal/dedupe-key readback))
+       (= (:proposal/method-version proposal) (:proposal/method-version readback))
+       (= (:proposal/window proposal) (:proposal/window readback))
+       (= (:proposal/findings proposal) (:proposal/findings readback))
+       (= (:proposal/flags proposal) (:proposal/flags readback))
+       (some? (:proposal/flags readback))
+       (= :partial (:proposal/coverage readback))
+       (true? (:proposal/suggestion-only readback))
+       (true? (:proposal/ranking-forbidden readback))
+       (true? (:proposal/causal-claims-forbidden readback))
+       (true? (:proposal/repair-forbidden readback))
+       (nil? (:proposal/ranking readback))
+       (empty? (:proposal/claims readback))))

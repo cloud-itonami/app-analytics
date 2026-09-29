@@ -42,7 +42,7 @@
             ↓ shadow-cljs :target :esm
     dist/worker.js              wrangler.jsonc の main が指すもの
 
-このワークスペースの正本言語は cljs と kotoba である（superproject CLAUDE.md の
+このワークスペースの正本言語は cljs と kotoba である（superproject AGENTS.md の
 runtime 順序は kotoba wasm > clojurewasm > ClojureScript > nbb で、TypeScript は
 そこに無い）。候補の 2 実装はどちらも TypeScript なので、**どちらを選んでも
 正本には着地しない**。先例は同じ org の cloud-itonami/app-ongakuka（ADR-0002、

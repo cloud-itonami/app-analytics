@@ -185,7 +185,7 @@ safe-area / tap target / focus-visible / reduced-motion / 対比などの
 ## §6 bundle をビルドする ✅
 
 **高負荷ビルドは workspace 全体で同時 1 本**に制限されている（superproject
-`CLAUDE.md` の resource governor）。直接叩かず必ず guard 経由で:
+`AGENTS.md` の resource governor）。直接叩かず必ず guard 経由で:
 
 ```bash
 node ~/github/com-junkawasaki/scripts/resource-guard.mjs run build -- \
@@ -410,7 +410,7 @@ npx wrangler deploy
 ない。中継先も同様なので、到達できたとしても中継は 502 を返す。superproject の
 deploy guard は `origin/main` を包含した checkout からの deploy しか許さない点も
 併せて注意（west checkout の remote は org 名なので、その guard は
-`origin/main` を解決できず fail-open する —— superproject CLAUDE.md が
+`origin/main` を解決できず fail-open する —— superproject AGENTS.md が
 2026-08-13 に記録した既知の穴）。
 
 ## §11 この walk で走らせていないもの

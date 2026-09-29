@@ -1,7 +1,7 @@
 ;; app-analytics — the analytics appview.
 ;;
 ;; The Worker is ClojureScript, per the repo-wide runtime order in the
-;; superproject CLAUDE.md (kotoba wasm > clojurewasm > ClojureScript > nbb).
+;; superproject AGENTS.md (kotoba wasm > clojurewasm > ClojureScript > nbb).
 ;; Keeping the entry in cljs rather than .kotoba is ADR-2606290000's standing
 ;; call: kotoba's ingress capability is :native-aot/:wasm-aot pending. The
 ;; decision-shaped parts live in .cljc so they are testable without a browser,

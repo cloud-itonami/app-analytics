@@ -17,8 +17,9 @@
         ;; this repo silently rides whatever a sibling happens to name.
         io.github.kotoba-lang/text {:git/sha "73bdb13ae7a3d004b44bca08be03a3191157a38f"}
        io.github.kotoba-lang/jp-go-digital-design-system
-        {:git/url "https://github.com/kotoba-lang/jp-go-digital-design-system"
-         :git/sha "0a0218052b0d563057341a1c2ab310045052bd23"}}
+        {:git/url "https://github.com/kotoba-lang/kotoba.git"
+         :git/sha "3dfb77e29a541416bfd6a39aee202ab770ddf952"
+         :deps/root "lib/kotoba.jpGoDigitalDesignSystem"}}
  :aliases
  {:cljs {:extra-deps {org.clojure/clojurescript {:mvn/version "1.11.132"}
                       thheller/shadow-cljs {:mvn/version "2.28.20"}}}
